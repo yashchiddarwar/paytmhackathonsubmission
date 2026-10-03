@@ -1,0 +1,100 @@
+import json
+import random
+from typing import Dict, Any
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from sqlalchemy.orm import Session
+from app.database import get_db, SessionLocal
+from app.models import DBClaim, DBChatHistory
+from app.schemas import ChatRequest, ChatResponse
+from app.chains.pilot_chain import generate_copilot_response
+
+router = APIRouter(tags=["Copilot"])
+
+@router.post("/api/ai/chat")
+def chat_copilot(req: ChatRequest, db: Session = Depends(get_db)):
+    """
+    Context-aware Copilot endpoint grounded with local ChromaDB RAG and Ollama LLM.
+    """
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required")
+
+    # Fetch active claim for context
+    claim = None
+    if req.claimId:
+        claim = db.query(DBClaim).filter((DBClaim.id == req.claimId) | (DBClaim.claim_number == req.claimId)).first()
+    if not claim:
+        claim = db.query(DBClaim).filter(DBClaim.status != "submitted").order_by(DBClaim.created_at.desc()).first()
+
+    current_step = int(req.currentStep) if (req.currentStep and str(req.currentStep).isdigit()) else 2
+
+    # Execute grounded copilot chain
+    ai_result = generate_copilot_response(
+        message=message,
+        claim=claim,
+        current_step=current_step,
+        chat_history=req.chatHistory
+    )
+
+    # Persist chat history in SQLite
+    claim_id = claim.id if claim else (req.claimId or "general")
+    try:
+        user_msg = DBChatHistory(
+            id=f"msg-{random.randint(100000, 999999)}",
+            claim_id=claim_id,
+            sender="user",
+            text=message,
+            metadata_json={}
+        )
+        assistant_msg = DBChatHistory(
+            id=f"msg-{random.randint(100000, 999999)}",
+            claim_id=claim_id,
+            sender="assistant",
+            text=ai_result["text"],
+            metadata_json={"grounding": ai_result.get("groundingContext")}
+        )
+        db.add_all([user_msg, assistant_msg])
+        db.commit()
+    except Exception as e:
+        print(f"Could not persist chat message: {e}")
+
+    return ai_result
+
+@router.websocket("/ws/copilot")
+async def websocket_copilot_endpoint(websocket: WebSocket):
+    """
+    Real-time WebSocket endpoint for AI Claim Pilot copilot conversation.
+    """
+    await websocket.accept()
+    db = SessionLocal()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                payload = json.loads(data)
+            except Exception:
+                payload = {"message": data}
+
+            message = payload.get("message", "")
+            claim_id = payload.get("claimId")
+            current_step = payload.get("currentStep", 2)
+
+            claim = None
+            if claim_id:
+                claim = db.query(DBClaim).filter((DBClaim.id == claim_id) | (DBClaim.claim_number == claim_id)).first()
+            if not claim:
+                claim = db.query(DBClaim).filter(DBClaim.status != "submitted").first()
+
+            result = generate_copilot_response(
+                message=message,
+                claim=claim,
+                current_step=int(current_step) if str(current_step).isdigit() else 2
+            )
+
+            await websocket.send_text(json.dumps(result))
+    except WebSocketDisconnect:
+        pass
+    except Exception as err:
+        print(f"WebSocket error: {err}")
+    finally:
+        db.close()

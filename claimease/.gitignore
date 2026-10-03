@@ -1,0 +1,29 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+backend/venv/
+venv/
+.venv/
+
+# Large Model Weights (Downloaded locally)
+backend/weights/*.onnx
+backend/weights/*.bin
+*.onnx
+*.bin
+
+# Local SQLite & Vector Databases
+data/claimease.db
+data/claimease.db-journal
+data/chroma_db/
+data/uploads/
+

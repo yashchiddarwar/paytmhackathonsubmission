@@ -1,0 +1,6 @@
+{
+  "name": "ClaimEase",
+  "description": "AI Claim Pilot & Insurance Claim Preparation and Document Diagnostics Platform",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
