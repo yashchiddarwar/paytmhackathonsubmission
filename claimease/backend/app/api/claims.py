@@ -449,12 +449,6 @@ def seed_sample_claim(db: Session = Depends(get_db)):
     db.refresh(sample)
     return {"success": True, "message": "Sample claim seeded.", "claim": sample.to_dict()}
 
-@router.get("/api/policies")
-def list_policies(db: Session = Depends(get_db)):
-    seed_database_if_empty(db)
-    policies = db.query(DBPolicy).all()
-    return [p.to_dict() for p in policies]
-
 # --- AI INCIDENT TO CLAIM CONVERSION ENDPOINT ---
 
 @router.post("/api/ai/convert-incident")

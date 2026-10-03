@@ -101,16 +101,6 @@ export async function updateClaim(claimId: string, updates: Partial<DBClaim>): P
   }
 }
 
-export async function fetchPolicies(): Promise<any[]> {
-  try {
-    const res = await fetch('/api/policies');
-    if (!res.ok) throw new Error('Failed to fetch policies');
-    return await res.json();
-  } catch (err) {
-    console.warn('Error fetching policies:', err);
-    return [];
-  }
-}
 
 export async function sendClaimChatMessage(params: {
   message: string;
