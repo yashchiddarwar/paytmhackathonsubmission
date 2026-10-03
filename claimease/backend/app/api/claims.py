@@ -414,7 +414,9 @@ def convert_incident_endpoint(req: IncidentRequest, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="Incident narrative is required")
 
     seed_database_if_empty(db)
-    policy = db.query(DBPolicy).first()
+    policy = None
+    if req.policyNumber and req.policyNumber != "none":
+        policy = db.query(DBPolicy).filter(DBPolicy.policy_number == req.policyNumber).first()
 
     # Run Ollama conversion chain
     parsed = run_incident_conversion(narrative, default_policy=policy)
@@ -587,10 +589,10 @@ def convert_incident_endpoint(req: IncidentRequest, db: Session = Depends(get_db
     created = DBClaim(
         id=claim_id,
         claim_number=new_claim_number,
-        policy_number=policy.policy_number if policy else "MOT-9284-IN",
-        vehicle="Insured Vehicle" if not policy else f"{policy.carrier} Covered Asset",
+        policy_number=policy.policy_number if policy else "FREEFORM-PENDING-POLICY",
+        vehicle=(policy.vehicle.get("makeModel", "Insured Asset") if (policy and isinstance(policy.vehicle, dict)) else ("General Insured Asset" if not policy else f"{policy.carrier} Asset")),
         policy_type=claim_type,
-        insurer=policy.carrier if policy else "Comprehensive Motor Insurer",
+        insurer=policy.carrier if policy else "Direct Insurer Adjudication",
         status="initiated",
         current_step=1,
         progress_percent=10,

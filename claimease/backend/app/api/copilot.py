@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db, SessionLocal
-from app.models import DBClaim, DBChatHistory
+from app.models import DBClaim, DBChatHistory, DBPolicy
 from app.schemas import ChatRequest, ChatResponse
 from app.chains.pilot_chain import generate_copilot_response
 
@@ -43,12 +43,15 @@ def chat_copilot(req: ChatRequest, db: Session = Depends(get_db)):
     if not message:
         raise HTTPException(status_code=400, detail="Message is required")
 
-    # Fetch active claim for context
+    # Resolve context: either specific claim, specific policy, or general (no context)
     claim = None
-    if req.claimId:
-        claim = db.query(DBClaim).filter((DBClaim.id == req.claimId) | (DBClaim.claim_number == req.claimId)).first()
-    if not claim:
-        claim = db.query(DBClaim).filter(DBClaim.status != "submitted").order_by(DBClaim.created_at.desc()).first()
+    policy = None
+    if not req.noContext:
+        if req.claimId and req.claimId not in ("general", "none"):
+            claim = db.query(DBClaim).filter((DBClaim.id == req.claimId) | (DBClaim.claim_number == req.claimId)).first()
+        
+        if not claim and req.policyNumber and req.policyNumber not in ("none", "general"):
+            policy = db.query(DBPolicy).filter(DBPolicy.policy_number == req.policyNumber).first()
 
     current_step = int(req.currentStep) if (req.currentStep and str(req.currentStep).isdigit()) else 2
 
@@ -56,12 +59,14 @@ def chat_copilot(req: ChatRequest, db: Session = Depends(get_db)):
     ai_result = generate_copilot_response(
         message=message,
         claim=claim,
+        policy=policy,
+        no_context=bool(req.noContext or (claim is None and policy is None)),
         current_step=current_step,
         chat_history=req.chatHistory
     )
 
     # Persist chat history in SQLite
-    claim_id = claim.id if claim else (req.claimId or "general")
+    claim_id = claim.id if claim else (policy.policy_number if policy else "general")
     try:
         user_msg = DBChatHistory(
             id=f"msg-{random.randint(100000, 999999)}",

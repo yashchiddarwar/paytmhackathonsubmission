@@ -36,7 +36,7 @@ async function main() {
     console.log(`⚡ Spawning FastAPI backend using: ${pythonPath}`);
     backendProc = spawn(pythonPath, ['backend/run.py'], {
       stdio: 'inherit',
-      shell: true,
+      shell: false,
       cwd: process.cwd()
     });
 

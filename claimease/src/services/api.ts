@@ -88,9 +88,22 @@ export async function updateClaim(claimId: string, updates: Partial<DBClaim>): P
   }
 }
 
+export async function fetchPolicies(): Promise<any[]> {
+  try {
+    const res = await fetch('/api/policies');
+    if (!res.ok) throw new Error('Failed to fetch policies');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error fetching policies:', err);
+    return [];
+  }
+}
+
 export async function sendClaimChatMessage(params: {
   message: string;
   claimId?: string;
+  policyNumber?: string;
+  noContext?: boolean;
   currentStep?: ClaimJourneyStep;
   chatHistory?: { role: 'user' | 'model'; text: string }[];
 }): Promise<{
@@ -98,7 +111,7 @@ export async function sendClaimChatMessage(params: {
   groundingContext: {
     title: string;
     details: string;
-    claimId: string;
+    claimId?: string;
     stepNumber?: number | string;
   };
   suggestedQueries: string[];
@@ -122,7 +135,7 @@ export async function sendClaimChatMessage(params: {
   return await res.json();
 }
 
-export async function convertIncidentToJourney(narrative: string): Promise<{
+export async function convertIncidentToJourney(narrative: string, policyNumber?: string): Promise<{
   success: boolean;
   claim: DBClaim;
   aiAnalysis: {
@@ -140,7 +153,7 @@ export async function convertIncidentToJourney(narrative: string): Promise<{
   const res = await fetch('/api/ai/convert-incident', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ narrative })
+    body: JSON.stringify({ narrative, policyNumber })
   });
 
   if (!res.ok) {
