@@ -2,7 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { ScreenType, ClaimJourneyStep, ClaimDocument } from '../types';
 import { HOTLINK_IMAGES, MOCK_DOCUMENTS } from '../data/mockData';
 import { DBClaim } from '../../server/db';
-import { updateClaim, seedSampleClaim } from '../services/api';
+import { 
+  updateClaim, 
+  seedSampleClaim, 
+  fetchClaims, 
+  activateClaim, 
+  fetchChatHistory, 
+  fetchIncidentConversions, 
+  clearChatHistory, 
+  clearAllClaims 
+} from '../services/api';
+
 
 interface ClaimJourneyScreenProps {
   onNavigate: (screen: ScreenType) => void;
@@ -88,27 +98,544 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
     }, 1200);
   };
 
-  // If there is no active claim in the database (brand new account)
-  if (!activeClaim) {
-    return (
-      <div className="flex flex-col w-full max-w-7xl mx-auto gap-8 pb-12 animate-fade-in">
-        {/* Top Breadcrumb */}
-        <div className="flex items-center gap-2 text-xs text-zinc-400 pb-2 border-b border-white/[0.06]">
-          <button onClick={() => onNavigate('home')} className="hover:text-white transition-colors flex items-center gap-1">
-            <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+  // Sub-Navigation Tabs: 'journey' | 'all-claims' | 'chat-history'
+  const [activeTab, setActiveTab] = useState<'journey' | 'all-claims' | 'chat-history'>(
+    activeClaim ? 'journey' : 'all-claims'
+  );
+  const [allClaims, setAllClaims] = useState<DBClaim[]>([]);
+  const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [incidentConversions, setIncidentConversions] = useState<any[]>([]);
+  const [claimSearch, setClaimSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'submitted'>('all');
+
+  const refreshClaimsAndHistory = async () => {
+    try {
+      const [claims, chats, conversions] = await Promise.all([
+        fetchClaims(),
+        fetchChatHistory(activeClaim?.id),
+        fetchIncidentConversions()
+      ]);
+      setAllClaims(claims || []);
+      setChatHistory(chats || []);
+      setIncidentConversions(conversions || []);
+      if (!activeClaim && claims && claims.length > 0) {
+        setActiveTab('all-claims');
+      }
+    } catch (err) {
+      console.warn('Failed to load claims & chat history:', err);
+    }
+  };
+
+  useEffect(() => {
+    refreshClaimsAndHistory();
+  }, [activeClaim?.id]);
+
+  const handleSelectAndActivateClaim = async (claimId: string) => {
+    try {
+      const activated = await activateClaim(claimId);
+      if (activated && onUpdateClaim) {
+        onUpdateClaim(activated);
+        setCurrentStep(activated.currentStep || 1);
+        setActiveTab('journey');
+      }
+    } catch (e) {
+      console.error('Error activating claim:', e);
+    }
+  };
+
+  const handleClearChat = async () => {
+    if (!confirm('Are you sure you want to clear AI Copilot interaction history?')) return;
+    await clearChatHistory(activeClaim?.id);
+    setChatHistory([]);
+  };
+
+  const handleClearAll = async () => {
+    if (!confirm('Are you sure you want to clear all claims and start with a brand new clean account?')) return;
+    await clearAllClaims();
+    setAllClaims([]);
+    if (onUpdateClaim) onUpdateClaim(null as any);
+    setActiveTab('all-claims');
+  };
+
+  const filteredClaims = allClaims.filter(c => {
+    if (filterStatus === 'active' && c.status === 'submitted') return false;
+    if (filterStatus === 'submitted' && c.status !== 'submitted') return false;
+    if (claimSearch.trim()) {
+      const q = claimSearch.toLowerCase();
+      const matchNum = c.claimNumber?.toLowerCase().includes(q);
+      const matchVeh = c.vehicle?.toLowerCase().includes(q);
+      const matchDmg = JSON.stringify(c.damages || '').toLowerCase().includes(q);
+      return matchNum || matchVeh || matchDmg;
+    }
+    return true;
+  });
+
+  return (
+    <div className="flex flex-col w-full max-w-7xl mx-auto gap-6 pb-12 animate-fade-in">
+      {/* Top Header & Sub-Navigation Tabs */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-white/[0.08]">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => onNavigate('home')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C1B1B] hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all text-xs font-semibold"
+          >
+            <span className="material-symbols-outlined text-[16px]">arrow_back</span>
             <span>Home</span>
           </button>
-          <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <span className="text-zinc-300">My Claims</span>
-          <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <span className="text-[#C5F258] font-semibold">Brand New Account</span>
+          <span className="text-zinc-600">/</span>
+          <span className="text-xs font-mono text-zinc-300 font-semibold uppercase tracking-wider">
+            Claims Management Hub
+          </span>
         </div>
 
-        {/* Empty State Hero Container */}
-        <div className="p-8 sm:p-12 rounded-3xl bg-[#1C1B1B] border border-white/[0.08] text-center max-w-3xl mx-auto flex flex-col items-center gap-6 shadow-2xl relative overflow-hidden">
-          <div className="absolute -right-20 -top-20 w-64 h-64 bg-[#C5F258]/10 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute -left-20 -bottom-20 w-64 h-64 bg-[#632D93]/15 rounded-full blur-3xl pointer-events-none" />
+        {/* 3 Main View Tabs */}
+        <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-[#141414] border border-white/[0.08] self-start md:self-auto overflow-x-auto max-w-full">
+          <button
+            onClick={() => setActiveTab('journey')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'journey'
+                ? 'bg-[#C5F258] text-[#151F00] shadow-[0_2px_12px_rgba(197,242,88,0.25)]'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">route</span>
+            <span>Active Journey</span>
+            {activeClaim ? (
+              <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+                activeTab === 'journey' ? 'bg-black/20 text-[#151F00]' : 'bg-[#C5F258]/20 text-[#C5F258]'
+              }`}>
+                {activeClaim.claimNumber}
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.2 rounded text-[10px] bg-zinc-800 text-zinc-500">None</span>
+            )}
+          </button>
 
+          <button
+            onClick={() => setActiveTab('all-claims')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'all-claims'
+                ? 'bg-[#C5F258] text-[#151F00] shadow-[0_2px_12px_rgba(197,242,88,0.25)]'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">inventory_2</span>
+            <span>All Claims & History</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+              activeTab === 'all-claims' ? 'bg-black/20 text-[#151F00]' : 'bg-zinc-800 text-zinc-300'
+            }`}>
+              {allClaims.length}
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('chat-history')}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+              activeTab === 'chat-history'
+                ? 'bg-[#C5F258] text-[#151F00] shadow-[0_2px_12px_rgba(197,242,88,0.25)]'
+                : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">forum</span>
+            <span>AI Copilot & Voice Logs</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono ${
+              activeTab === 'chat-history' ? 'bg-black/20 text-[#151F00]' : 'bg-zinc-800 text-zinc-300'
+            }`}>
+              {chatHistory.length + incidentConversions.length}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* ALL CLAIMS & HISTORY VIEW */}
+      {activeTab === 'all-claims' && (
+        <div className="flex flex-col gap-6 animate-fade-in">
+          {/* Header Action Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-[#1C1B1B] border border-white/[0.08]">
+            <div>
+              <div className="flex items-center gap-2 text-xs text-[#C5F258] font-bold">
+                <span className="material-symbols-outlined text-[16px]">folder_special</span>
+                <span>Claims Archive & Portfolio</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-extrabold text-white mt-0.5 font-display">
+                Your Claims History ({allClaims.length})
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1">
+                Browse past and current motor claims, inspect audit readiness scores, or switch active dossiers.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => onNavigate('ai-claim-pilot')}
+                className="px-4 py-2 rounded-xl bg-[#632D93] hover:bg-[#7837b3] text-[#DEB7FF] font-bold text-xs flex items-center gap-1.5 transition-all shadow-md"
+              >
+                <span className="material-symbols-outlined text-[16px]">record_voice_over</span>
+                <span>Dictate New Claim</span>
+              </button>
+              <button
+                onClick={async () => {
+                  const sample = await seedSampleClaim();
+                  if (sample && onUpdateClaim) onUpdateClaim(sample);
+                  await refreshClaimsAndHistory();
+                  setActiveTab('journey');
+                }}
+                className="px-4 py-2 rounded-xl bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center gap-1.5 transition-all shadow-md"
+              >
+                <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                <span>Seed Sample Claim</span>
+              </button>
+              {allClaims.length > 0 && (
+                <button
+                  onClick={handleClearAll}
+                  className="px-3 py-2 rounded-xl bg-zinc-800/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 font-semibold text-xs transition-colors border border-white/[0.06]"
+                  title="Clear all claims data"
+                >
+                  <span className="material-symbols-outlined text-[16px]">delete</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Search & Filter row */}
+          {allClaims.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="relative w-full sm:w-80">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 text-[18px]">
+                  search
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search by claim #, vehicle or damage..."
+                  value={claimSearch}
+                  onChange={(e) => setClaimSearch(e.target.value)}
+                  className="w-full bg-[#161616] border border-white/[0.08] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#C5F258]"
+                />
+              </div>
+
+              <div className="flex items-center gap-1 self-start sm:self-auto bg-[#141414] p-1 rounded-xl border border-white/[0.08] text-xs">
+                {(['all', 'active', 'submitted'] as const).map(st => (
+                  <button
+                    key={st}
+                    onClick={() => setFilterStatus(st)}
+                    className={`px-3 py-1 rounded-lg font-semibold capitalize transition-all ${
+                      filterStatus === st ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    {st === 'all' ? `All (${allClaims.length})` : st}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* If No claims in DB */}
+          {allClaims.length === 0 ? (
+            <div className="p-8 sm:p-12 rounded-3xl bg-[#1C1B1B] border border-white/[0.08] text-center max-w-3xl mx-auto flex flex-col items-center gap-6 shadow-2xl relative overflow-hidden">
+              <div className="w-16 h-16 rounded-3xl bg-[#C5F258]/10 border border-[#C5F258]/30 flex items-center justify-center text-[#C5F258]">
+                <span className="material-symbols-outlined text-[36px]">shield_check</span>
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold text-white">No Claims on Record</h3>
+                <p className="text-xs text-zinc-400 max-w-md mx-auto leading-relaxed">
+                  Your account currently has zero filed claims. Dictate what happened with the AI Claim Pilot or seed a sample claim.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={() => onNavigate('ai-claim-pilot')}
+                  className="px-5 py-2.5 rounded-xl bg-[#632D93] text-[#DEB7FF] font-bold text-xs flex items-center gap-2 hover:bg-[#7637b0] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">record_voice_over</span>
+                  <span>Dictate Incident</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    const sample = await seedSampleClaim();
+                    if (sample && onUpdateClaim) onUpdateClaim(sample);
+                    await refreshClaimsAndHistory();
+                    setActiveTab('journey');
+                  }}
+                  className="px-5 py-2.5 rounded-xl bg-[#C5F258] text-[#151F00] font-bold text-xs flex items-center gap-2 hover:bg-[#b8e748] transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                  <span>Seed Test Claim</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filteredClaims.map((claim) => {
+                const isCurrentActive = activeClaim?.id === claim.id;
+                const verifiedDocCount = claim.documents?.filter((d: any) => d.status === 'verified').length || 0;
+                const totalDocCount = claim.documents?.length || 0;
+
+                return (
+                  <div
+                    key={claim.id}
+                    className={`p-5 rounded-2xl bg-[#181818] border transition-all flex flex-col justify-between gap-4 group ${
+                      isCurrentActive
+                        ? 'border-[#C5F258] shadow-[0_0_25px_rgba(197,242,88,0.12)]'
+                        : 'border-white/[0.08] hover:border-white/20'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-bold text-white tracking-wide">
+                            {claim.claimNumber}
+                          </span>
+                          {isCurrentActive && (
+                            <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/20 text-[#C5F258] text-[10px] font-bold border border-[#C5F258]/30 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-[#C5F258] animate-pulse"></span>
+                              Active Dossier
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="text-xs text-zinc-300 font-medium mt-1">
+                          {claim.vehicle || 'Motor Vehicle Claim'}
+                        </h4>
+                        <p className="text-[11px] text-zinc-500 font-mono">
+                          Policy: {claim.policyNumber} • {claim.insurer}
+                        </p>
+                      </div>
+
+                      <div className="text-right">
+                        <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                          claim.status === 'submitted'
+                            ? 'bg-[#632D93]/40 text-[#DEB7FF] border border-[#DEB7FF]/30'
+                            : claim.status === 'ready'
+                            ? 'bg-[#C5F258]/20 text-[#C5F258] border border-[#C5F258]/30'
+                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {claim.status === 'submitted' ? 'Submitted & Sealed' :
+                           claim.status === 'ready' ? 'Ready to Transmit' :
+                           claim.status === 'initiated' ? 'Draft / New' : 'In Review'}
+                        </span>
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          {claim.incidentDate ? `Incident: ${claim.incidentDate}` : 'Date: N/A'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Damages Badges */}
+                    {claim.damages && claim.damages.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {claim.damages.map((dmg: any, i: number) => {
+                          const label = typeof dmg === 'string' ? dmg : (dmg.part || dmg.description || 'Damage');
+                          return (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded-md bg-zinc-900 border border-white/[0.06] text-[11px] text-zinc-300"
+                            >
+                              • {label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Progress Bar & Documents Ratio */}
+                    <div className="space-y-1.5 bg-black/20 p-2.5 rounded-xl border border-white/[0.04]">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-zinc-400">Document Verification</span>
+                        <span className="text-zinc-300 font-semibold font-mono">
+                          {verifiedDocCount} / {totalDocCount} Verified
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                        <div
+                          className="h-full bg-[#C5F258] transition-all rounded-full"
+                          style={{ width: `${claim.progressPercent || 25}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="flex items-center justify-between gap-3 pt-2 border-t border-white/[0.06]">
+                      <div className="text-xs">
+                        <span className="text-zinc-500">Est. Loss: </span>
+                        <span className="text-white font-bold font-mono">
+                          {claim.estimatedAmount ? `₹${Number(claim.estimatedAmount).toLocaleString('en-IN')}` : '₹84,500'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            if (onOpenAiHelper) onOpenAiHelper(`Tell me status of claim ${claim.claimNumber}`);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white text-xs font-semibold flex items-center gap-1 transition-colors"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">smart_toy</span>
+                          <span>Chat</span>
+                        </button>
+
+                        <button
+                          onClick={() => handleSelectAndActivateClaim(claim.id)}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                            isCurrentActive
+                              ? 'bg-[#C5F258] text-[#151F00] hover:bg-[#b8e748]'
+                              : 'bg-white hover:bg-zinc-200 text-black shadow-md'
+                          }`}
+                        >
+                          <span>{isCurrentActive ? 'Continue Journey' : 'Switch & View'}</span>
+                          <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI CHAT & VOICE TRANSCRIPTS VIEW */}
+      {activeTab === 'chat-history' && (
+        <div className="flex flex-col gap-6 animate-fade-in">
+          {/* Header Action Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-[#1C1B1B] border border-white/[0.08]">
+            <div>
+              <div className="flex items-center gap-2 text-xs text-[#DEB7FF] font-bold">
+                <span className="material-symbols-outlined text-[16px]">record_voice_over</span>
+                <span>AI Claim Pilot Interaction Logs</span>
+              </div>
+              <h2 className="text-xl sm:text-2xl font-extrabold text-white mt-0.5 font-display">
+                Past Chats & Dictation Transcripts
+              </h2>
+              <p className="text-xs text-zinc-400 mt-1">
+                Chronological record of conversational questions, speech incident dictations, and grounded AI responses.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  if (onOpenAiHelper) onOpenAiHelper();
+                }}
+                className="px-4 py-2 rounded-xl bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center gap-1.5 transition-all shadow-md"
+              >
+                <span className="material-symbols-outlined text-[16px]">chat</span>
+                <span>Open AI Copilot</span>
+              </button>
+              {(chatHistory.length > 0 || incidentConversions.length > 0) && (
+                <button
+                  onClick={handleClearChat}
+                  className="px-3 py-2 rounded-xl bg-zinc-800/80 hover:bg-red-500/20 text-zinc-400 hover:text-red-400 font-semibold text-xs transition-colors border border-white/[0.06]"
+                  title="Clear Chat History"
+                >
+                  <span className="material-symbols-outlined text-[16px]">delete</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Voice Incident Conversions Section */}
+          {incidentConversions.length > 0 && (
+            <div className="space-y-3">
+              <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-[16px] text-[#C5F258]">mic</span>
+                <span>Voice Incident Dictations Converted by AI ({incidentConversions.length})</span>
+              </h3>
+              <div className="grid grid-cols-1 gap-3">
+                {incidentConversions.map((conv, idx) => (
+                  <div key={conv.id || idx} className="p-4 rounded-2xl bg-[#161616] border border-white/[0.06] flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-[11px] text-zinc-500">
+                      <span className="font-mono text-[#DEB7FF]">Incident Conversion #{conv.id}</span>
+                      <span>{conv.timestamp ? new Date(conv.timestamp).toLocaleString() : 'Recent'}</span>
+                    </div>
+                    <blockquote className="text-xs text-zinc-200 italic bg-black/30 p-3 rounded-xl border border-white/[0.04]">
+                      "{conv.inputNarrative}"
+                    </blockquote>
+                    {conv.metadata && (
+                      <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                        <span className="text-zinc-400">Extracted Category:</span>
+                        <span className="text-[#C5F258] font-semibold">{conv.metadata.incidentCategory || 'Own Damage'}</span>
+                        {conv.metadata.damages && (
+                          <span className="text-zinc-500">• Damages: {conv.metadata.damages.map((d: any) => d.part || d).join(', ')}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Copilot Chat Interactions */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+              <span className="material-symbols-outlined text-[16px] text-[#DEB7FF]">forum</span>
+              <span>Copilot Conversations ({chatHistory.length})</span>
+            </h3>
+
+            {chatHistory.length === 0 ? (
+              <div className="p-8 rounded-2xl bg-[#161616] border border-white/[0.06] text-center max-w-lg mx-auto space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-zinc-800 flex items-center justify-center text-zinc-400 mx-auto">
+                  <span className="material-symbols-outlined text-[24px]">chat_bubble_outline</span>
+                </div>
+                <h4 className="text-sm font-bold text-white">No Copilot Chat History Yet</h4>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Ask any question about deductibles, mandatory FIR requirements, surveyor timelines, or document diagnostics using the bottom-right AI Claim Pilot bubble.
+                </p>
+                <button
+                  onClick={() => {
+                    if (onOpenAiHelper) onOpenAiHelper("What documents do I need for my bumper damage?");
+                  }}
+                  className="px-4 py-2 rounded-xl bg-[#632D93] text-[#DEB7FF] hover:bg-[#7637b0] font-bold text-xs inline-flex items-center gap-1.5 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[15px]">send</span>
+                  <span>Ask Sample Question</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {chatHistory.map((msg, idx) => {
+                  const isUser = msg.sender === 'user';
+                  return (
+                    <div
+                      key={msg.id || idx}
+                      className={`flex gap-3 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+                    >
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+                        isUser ? 'bg-zinc-700 text-white' : 'bg-[#632D93] text-[#DEB7FF]'
+                      }`}>
+                        <span className="material-symbols-outlined text-[16px]">
+                          {isUser ? 'person' : 'auto_awesome'}
+                        </span>
+                      </div>
+
+                      <div className={`p-4 rounded-2xl text-xs space-y-2 ${
+                        isUser
+                          ? 'bg-[#1F1F1F] text-white border border-white/[0.08]'
+                          : 'bg-[#151515] text-zinc-200 border border-[#DEB7FF]/20'
+                      }`}>
+                        <div className="flex items-center justify-between gap-4 text-[10px] text-zinc-500 pb-1 border-b border-white/[0.04]">
+                          <span className="font-semibold text-zinc-400">{isUser ? 'You' : 'ClaimEase Copilot'}</span>
+                          <span>{msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                        </div>
+                        <p className="leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                        {msg.metadata?.grounding && (
+                          <div className="pt-1.5 text-[10px] text-[#C5F258] font-mono flex items-center gap-1">
+                            <span className="material-symbols-outlined text-[12px]">verified</span>
+                            <span>Grounded: {msg.metadata.grounding.title || 'IRDAI Guidelines'}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ACTIVE JOURNEY VIEW */}
+      {activeTab === 'journey' && !activeClaim && (
+        <div className="p-8 sm:p-12 rounded-3xl bg-[#1C1B1B] border border-white/[0.08] text-center max-w-3xl mx-auto flex flex-col items-center gap-6 shadow-2xl relative overflow-hidden animate-fade-in">
           <div className="w-20 h-20 rounded-3xl bg-[#C5F258]/10 border border-[#C5F258]/30 flex items-center justify-center text-[#C5F258] shadow-[0_0_30px_rgba(197,242,88,0.2)]">
             <span className="material-symbols-outlined text-[40px]">shield_check</span>
           </div>
@@ -116,18 +643,61 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
           <div className="space-y-2 relative z-10">
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#C5F258]/10 text-[#C5F258] text-xs font-bold border border-[#C5F258]/20">
               <span className="w-1.5 h-1.5 rounded-full bg-[#C5F258]"></span>
-              <span>Zero Active Claims • Clean Account</span>
+              <span>No Active Claim Selected</span>
             </div>
-            <h1 className="text-2xl sm:text-4xl font-extrabold text-white font-display">
-              Ready to file your first claim
-            </h1>
+            <h2 className="text-2xl sm:text-4xl font-extrabold text-white font-display">
+              Ready to file or resume your claim
+            </h2>
             <p className="text-zinc-400 text-sm max-w-xl mx-auto leading-relaxed">
-              You are currently on a brand-new account with no existing claim data. You can dictate what happened using our speech AI pilot, or test the step-by-step audit workflow with a sample claim.
+              {allClaims.length > 0 
+                ? `You have ${allClaims.length} claims in your database. You can pick one from "All Claims & History", or start a new claim.`
+                : 'You are currently on a clean account with no existing claim data. Dictate an incident or test the workflow with a sample claim.'}
             </p>
           </div>
 
-          {/* Action Grid */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full pt-2 relative z-10">
+            {allClaims.length > 0 ? (
+              <button
+                onClick={() => setActiveTab('all-claims')}
+                className="p-5 rounded-2xl bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] text-left transition-all hover:scale-[1.02] flex flex-col justify-between h-44 shadow-lg group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-black/10 flex items-center justify-center text-[#151F00] mb-2">
+                  <span className="material-symbols-outlined text-[22px]">inventory_2</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#151F00] flex items-center justify-between">
+                    <span>View Past Claims ({allClaims.length})</span>
+                    <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                  </h3>
+                  <p className="text-xs text-[#263500] font-medium mt-1 leading-relaxed">
+                    Select any past claim to resume its journey and inspect verified documents.
+                  </p>
+                </div>
+              </button>
+            ) : (
+              <button
+                onClick={async () => {
+                  const sample = await seedSampleClaim();
+                  if (sample && onUpdateClaim) onUpdateClaim(sample);
+                  await refreshClaimsAndHistory();
+                }}
+                className="p-5 rounded-2xl bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] text-left transition-all hover:scale-[1.02] flex flex-col justify-between h-44 shadow-lg group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-black/10 flex items-center justify-center text-[#151F00] mb-2">
+                  <span className="material-symbols-outlined text-[22px]">auto_awesome</span>
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#151F00] flex items-center justify-between">
+                    <span>Seed Test Claim (Hyundai Creta)</span>
+                    <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
+                  </h3>
+                  <p className="text-xs text-[#263500] font-medium mt-1 leading-relaxed">
+                    Instant sample claim with front bumper collision to test Step 2 dispute resolution.
+                  </p>
+                </div>
+              </button>
+            )}
+
             <button
               onClick={() => onNavigate('ai-claim-pilot')}
               className="p-5 rounded-2xl bg-[#632D93]/40 hover:bg-[#632D93]/60 border border-[#DEB7FF]/30 text-left transition-all hover:scale-[1.02] flex flex-col justify-between h-44 group shadow-lg"
@@ -145,81 +715,35 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
                 </p>
               </div>
             </button>
-
-            <button
-              onClick={async () => {
-                const sample = await seedSampleClaim();
-                if (sample && onUpdateClaim) onUpdateClaim(sample);
-              }}
-              className="p-5 rounded-2xl bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] text-left transition-all hover:scale-[1.02] flex flex-col justify-between h-44 shadow-lg group"
-            >
-              <div className="w-10 h-10 rounded-xl bg-black/10 flex items-center justify-center text-[#151F00] mb-2">
-                <span className="material-symbols-outlined text-[22px]">auto_awesome</span>
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#151F00] flex items-center justify-between">
-                  <span>Seed Test Claim (Hyundai Creta)</span>
-                  <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
-                </h3>
-                <p className="text-xs text-[#263500] font-medium mt-1 leading-relaxed">
-                  Instant sample claim with front bumper collision to test Step 2 dispute resolution.
-                </p>
-              </div>
-            </button>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-zinc-500 pt-3 border-t border-white/[0.06] w-full relative z-10">
-            <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[15px] text-[#C5F258]">verified</span>
-              <span>DigiLocker Linked</span>
-            </span>
-            <span>•</span>
-            <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[15px] text-[#DEB7FF]">policy</span>
-              <span>3 Verified Policies</span>
-            </span>
-            <span>•</span>
-            <span className="flex items-center gap-1.5">
-              <span className="material-symbols-outlined text-[15px] text-[#FFB691]">lock</span>
-              <span>IRDAI Compliant Sandbox</span>
-            </span>
           </div>
         </div>
-      </div>
-    );
-  }
+      )}
 
-  return (
-    <div className="flex flex-col w-full max-w-7xl mx-auto gap-6 pb-12 animate-fade-in">
-      {/* Top Navigation & Context Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-white/[0.06]">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => onNavigate('home')}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1C1B1B] hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all text-xs font-semibold"
-          >
-            <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-            <span>Back to claims</span>
-          </button>
-          <span className="text-zinc-600">/</span>
-          <span className="text-xs font-mono text-[#C5F258] uppercase tracking-wider font-semibold">
-            CLAIM #{activeClaim.claimNumber} • {activeClaim.vehicle}
-          </span>
-        </div>
+      {/* ACTIVE JOURNEY DETAILS & STEPPER */}
+      {activeTab === 'journey' && activeClaim && (
+        <div className="flex flex-col gap-6">
+          {/* Sub Context Header */}
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-2 border-b border-white/[0.06]">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-mono text-[#C5F258] uppercase tracking-wider font-semibold">
+                ACTIVE CLAIM #{activeClaim.claimNumber} • {activeClaim.vehicle}
+              </span>
+            </div>
 
-        <div className="flex items-center gap-2.5">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-xs font-bold">
-            <span className="w-2 h-2 rounded-full bg-[#C5F258] animate-pulse"></span>
-            {currentStep === 'success' ? 'Submitted & Cryptographically Sealed' : 
-             currentStep === 3 ? '100% Ready to Submit' : 
-             currentStep === 4 ? 'Final Gateway Authorization' : 'Audit In Progress'}
-          </span>
-          <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[#1C1B1B] text-zinc-300 text-xs">
-            <span className="material-symbols-outlined text-[14px] text-[#DEB7FF]">verified_user</span>
-            <span>IRDAI Compliant</span>
-          </span>
-        </div>
-      </div>
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-xs font-bold">
+                <span className="w-2 h-2 rounded-full bg-[#C5F258] animate-pulse"></span>
+                {currentStep === 'success' ? 'Submitted & Cryptographically Sealed' : 
+                 currentStep === 3 ? '100% Ready to Submit' : 
+                 currentStep === 4 ? 'Final Gateway Authorization' : 'Audit In Progress'}
+              </span>
+              <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-[#1C1B1B] text-zinc-300 text-xs">
+                <span className="material-symbols-outlined text-[14px] text-[#DEB7FF]">verified_user</span>
+                <span>IRDAI Compliant</span>
+              </span>
+            </div>
+          </div>
+
 
       {/* Claim Header Title Area */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
@@ -1839,6 +2363,8 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
         </div>
       )}
 

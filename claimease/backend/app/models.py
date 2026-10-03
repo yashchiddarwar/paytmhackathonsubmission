@@ -47,9 +47,9 @@ class DBClaim(Base):
     incident_description = Column(Text, nullable=True)
     damages = Column(JSON, default=list)
     estimated_amount = Column(Float, default=0.0)
-    surveyor_name = Column(String, nullable=True, default="IRDAI Empanelled Surveyor")
-    surveyor_phone = Column(String, nullable=True, default="+91 98000 00000")
-    workshop_name = Column(String, nullable=True, default="Authorized Cashless Service Network")
+    surveyor_name = Column(String, nullable=True, default=None)
+    surveyor_phone = Column(String, nullable=True, default=None)
+    workshop_name = Column(String, nullable=True, default=None)
     ai_analysis = Column(JSON, nullable=True)
     documents = Column(JSON, default=list)
     timeline = Column(JSON, default=list)
@@ -157,3 +157,13 @@ class DBIncidentConversion(Base):
     extracted_claim_id = Column(String)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     metadata_json = Column(JSON, default=dict)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "inputNarrative": self.input_narrative,
+            "extractedClaimId": self.extracted_claim_id,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
+            "metadata": self.metadata_json or {},
+        }
+

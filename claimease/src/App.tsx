@@ -139,6 +139,7 @@ export default function App() {
         onNavigate={handleNavigate}
         isOpenMobile={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
+        activeClaim={activeClaim}
       />
 
       {/* Main App Container */}
@@ -149,6 +150,7 @@ export default function App() {
           onNavigate={handleNavigate}
           onOpenSearch={() => setIsSearchOpen(true)}
           onToggleMobileMenu={() => setIsMobileMenuOpen(prev => !prev)}
+          activeClaim={activeClaim}
         />
 
         {/* Primary Viewport Canvas */}

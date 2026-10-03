@@ -1,4 +1,5 @@
 import random
+from datetime import datetime
 from typing import List, Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -306,6 +307,24 @@ def update_claim(claim_id: str, payload: ClaimUpdate, db: Session = Depends(get_
     db.refresh(claim)
     return claim.to_dict()
 
+@router.post("/api/claims/{claim_id}/activate")
+def activate_claim(claim_id: str, db: Session = Depends(get_db)):
+    """Set a specific claim as the active claim by making sure its status is in_review and updating its updated_at timestamp."""
+    claim = db.query(DBClaim).filter((DBClaim.id == claim_id) | (DBClaim.claim_number == claim_id)).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    if claim.status == "submitted":
+        claim.status = "in_review"
+    claim.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(claim)
+    return claim.to_dict()
+
+@router.get("/api/ai/incident-conversions")
+def list_incident_conversions(db: Session = Depends(get_db)):
+    conversions = db.query(DBIncidentConversion).order_by(DBIncidentConversion.timestamp.desc()).all()
+    return [c.to_dict() for c in conversions]
+
 @router.post("/api/claims/clear")
 def clear_claims(db: Session = Depends(get_db)):
     db.query(DBClaim).delete()
@@ -404,44 +423,197 @@ def convert_incident_endpoint(req: IncidentRequest, db: Session = Depends(get_db
     new_claim_number = f"MOT-{random_num}-IN"
     claim_id = f"claim-{random.randint(100000, 999999)}"
 
-    # Get documents
-    docs = [d.to_dict() for d in db.query(DBDocument).all()]
-    for doc in docs:
-        if doc["id"] == "doc-fir":
-            doc["required"] = parsed.get("firRequired", True)
-            if parsed.get("firRequired", True):
-                doc["discrepancyAlert"] = parsed.get("firReason", "Police GD/FIR required due to multi-vehicle collision impact.")
+    fir_needed = bool(parsed.get("firRequired", False))
+    damages_list = parsed.get("damages", ["Front Bumper Assembly", "Left Side Scratches"])
+    raw_cost = parsed.get("estimatedCost")
+    try:
+        estimated_cost = float(raw_cost) if raw_cost is not None else 35000.0
+    except (ValueError, TypeError):
+        estimated_cost = 35000.0
+
+    # Generate genuine, clean document checklist for this new claim (pending upload)
+    clean_docs = [
+        {
+            "id": "doc-dl",
+            "name": "Driving Licence (Both Sides)",
+            "code": "DOC-DL-01",
+            "category": "Motor",
+            "required": True,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Upload valid permanent driving licence of the person driving during the accident.",
+            "description": "Driving licence of the driver at the time of loss.",
+            "mandateReason": "Statutory verification under Motor Vehicles Act Section 3.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        },
+        {
+            "id": "doc-rc",
+            "name": "Vehicle Registration Certificate (RC)",
+            "code": "DOC-RC-02",
+            "category": "Motor",
+            "required": True,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Smart card or digital Form 23 proving ownership.",
+            "description": "Registration Certificate confirming vehicle identity and chassis number.",
+            "mandateReason": "Confirms insurable interest and ownership records.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        },
+        {
+            "id": "doc-policy",
+            "name": "Insurance Policy Schedule",
+            "code": "DOC-POL-03",
+            "category": "Motor",
+            "required": True,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Active policy schedule showing Zero-Depreciation endorsement and OD tenure.",
+            "description": "Comprehensive insurance policy document.",
+            "mandateReason": "Section 64-VB compliance proving active risk cover.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        },
+        {
+            "id": "doc-photos",
+            "name": "Vehicle Damage Photos (Point of Impact & Scratches)",
+            "code": "DOC-PHOTO-04",
+            "category": "Motor",
+            "required": True,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Photographs of damaged front bumper, left side scratches, and vehicle number plate.",
+            "description": "Multi-angle photos documenting damage before repair dismantle.",
+            "mandateReason": "Essential photographic evidence for surveyor loss assessment.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        },
+        {
+            "id": "doc-estimate",
+            "name": "Repair Estimate / Quotation",
+            "code": "DOC-EST-05",
+            "category": "Motor",
+            "required": True,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Preliminary quote from authorized or network garage itemizing parts and labor.",
+            "description": "Itemized repair estimate from workshop.",
+            "mandateReason": "Establishes initial loss reserve for surveyor approval.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        },
+        {
+            "id": "doc-fir",
+            "name": "Police FIR / Station Diary (GD)",
+            "code": "DOC-FIR-06",
+            "category": "Motor",
+            "required": fir_needed,
+            "status": "missing",
+            "fileName": None,
+            "fileSize": None,
+            "fileType": None,
+            "diagnosticScore": 0.0,
+            "readiness": "0% Pending",
+            "ocrConfidence": 0.0,
+            "verified": False,
+            "discrepancyAlert": parsed.get("firReason") if fir_needed else None,
+            "extractedFields": {},
+            "checklist": [],
+            "notes": "Mandatory under Section 154 CrPC due to third-party involvement." if fir_needed else "Not mandatory for single-vehicle self-damage without third-party casualty.",
+            "description": "Police Station Diary extract or First Information Report copy.",
+            "mandateReason": "Required only when third-party property damage or bodily injuries occur.",
+            "specimenImageUrl": None,
+            "uploadedDate": None
+        }
+    ]
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    inc_date = parsed.get("incidentDateStr")
+    if not inc_date or "not specified" in str(inc_date).lower():
+        inc_date = now_str
+
+    inc_loc = parsed.get("incidentLocation")
+    if inc_loc and "not specified" in str(inc_loc).lower():
+        inc_loc = None
+
+    claim_type = parsed.get("claimTypeRecommended", parsed.get("incidentCategory", "Own Damage (OD) Motor Claim"))
 
     created = DBClaim(
         id=claim_id,
         claim_number=new_claim_number,
-        policy_number=policy.policy_number if policy else "HDFC-MOT-2024-88419",
-        vehicle="2022 Hyundai Creta SX(O) • KA-05-MK-9284",
-        policy_type=parsed.get("incidentCategory", "Motor Insurance — Accident Damage"),
-        insurer=policy.carrier if policy else "HDFC ERGO General Insurance Co.",
-        status="in_review",
+        policy_number=policy.policy_number if policy else "MOT-9284-IN",
+        vehicle="Insured Vehicle" if not policy else f"{policy.carrier} Covered Asset",
+        policy_type=claim_type,
+        insurer=policy.carrier if policy else "Comprehensive Motor Insurer",
+        status="initiated",
         current_step=1,
-        progress_percent=35,
-        incident_date=parsed.get("incidentDateStr", "2026-09-28 16:45"),
-        incident_location=parsed.get("incidentLocation", "Bengaluru, Karnataka"),
+        progress_percent=10,
+        incident_date=inc_date,
+        incident_location=inc_loc,
         incident_description=parsed.get("summary", narrative),
-        damages=parsed.get("damages", ["Front Bumper Assembly", "Right Headlamp Unit"]),
-        estimated_amount=float(parsed.get("estimatedCost", 75000.0)),
-        surveyor_name="IRDAI Empanelled Surveyor",
-        surveyor_phone="+91 98450 12894",
-        workshop_name="Apex Multi-Brand Autoworks (Cashless Network #BLR-402)",
-        documents=docs,
+        damages=damages_list,
+        estimated_amount=estimated_cost,
+        surveyor_name=None,
+        surveyor_phone=None,
+        workshop_name=None,
+        documents=clean_docs,
         ai_analysis=parsed,
         timeline=[
             {
-                "title": "Incident Voice / Text Converted to Claim",
-                "description": f"AI converted narrative: \"{parsed.get('title', 'Accident Damage')}\"",
+                "title": "Incident Converted to Claim Journey",
+                "description": f"Classified as {claim_type}: \"{parsed.get('title', 'Accident Damage')}\"",
                 "timestamp": "Just now",
                 "completed": True
             },
             {
                 "title": "Document Assembly & Verification",
-                "description": "Upload required photos, DL, RC and FIR if applicable",
+                "description": "Upload required vehicle photos, DL, RC and Repair Estimate",
                 "timestamp": "Current Stage",
                 "completed": False,
                 "current": True
@@ -465,17 +637,25 @@ def convert_incident_endpoint(req: IncidentRequest, db: Session = Depends(get_db
         "success": True,
         "claim": created.to_dict(),
         "aiAnalysis": {
-            "detectedCategory": parsed.get("incidentCategory", "Motor Insurance Accident Damage"),
-            "severity": parsed.get("severity", "moderate"),
-            "damagesIdentified": parsed.get("damages", ["Front Bumper Assembly", "Headlamp"]),
-            "firRequired": parsed.get("firRequired", True),
-            "firReason": parsed.get("firReason"),
+            "detectedCategory": parsed.get("incidentCategory", "Own Damage (OD) Motor Claim"),
+            "claimTypeRecommended": claim_type,
+            "severity": parsed.get("severity", "minor"),
+            "damagesIdentified": damages_list,
+            "requiredDocuments": parsed.get("requiredDocuments", [
+                "Valid Driving Licence",
+                "Vehicle Registration Certificate (RC)",
+                "Active Comprehensive Policy Schedule",
+                "Photos of Damaged Front Bumper & Left Scratches",
+                "Workshop Repair Estimate"
+            ]),
+            "firRequired": fir_needed,
+            "firReason": parsed.get("firReason", "No third-party injury or property dispute. FIR is not mandatory under IRDAI guidelines."),
             "cashlessEligible": True,
             "estimatedCostRange": {
-                "min": int(float(parsed.get("estimatedCost", 75000.0)) * 0.85),
-                "max": int(float(parsed.get("estimatedCost", 75000.0)) * 1.15)
+                "min": int(estimated_cost * 0.85),
+                "max": int(estimated_cost * 1.15)
             },
-            "recommendedFirstStep": parsed.get("recommendedAction", "Upload damaged vehicle photos and station GD entry copy."),
-            "keyAdvice": parsed.get("keyAdvice", "Do not dismantle broken parts before surveyor inspection photo evidence is logged.")
+            "recommendedFirstStep": parsed.get("recommendedAction", "File an Own Damage (OD) cashless claim with your comprehensive insurer and take the vehicle to an authorized network garage for surveyor assessment."),
+            "keyAdvice": parsed.get("keyAdvice", "Ensure your policy has an active Zero Depreciation add-on cover to avoid 50% depreciation deduction on the plastic/fiber bumper.")
         }
     }

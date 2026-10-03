@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev.js",
+    "dev:ui": "vite",
+    "dev:backend": "backend/venv/Scripts/python backend/run.py",
     "server:express": "tsx server.ts",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server.ts",
