@@ -410,7 +410,7 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
                         }`}>
                           {claim.status === 'submitted' ? 'Submitted & Sealed' :
                            claim.status === 'ready' ? 'Ready to Transmit' :
-                           claim.status === 'initiated' ? 'Draft / New' : 'In Review'}
+                           ((claim.status as string) === 'draft' || (claim.status as string) === 'initiated') ? 'Draft / New' : 'In Review'}
                         </span>
                         <p className="text-[10px] text-zinc-500 mt-1">
                           {claim.incidentDate ? `Incident: ${claim.incidentDate}` : 'Date: N/A'}

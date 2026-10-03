@@ -7,16 +7,18 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import FRONTEND_DIST, UPLOAD_DIR
-from app.database import Base, engine, get_db
-from app.models import DBClaim, DBDocument, DBPolicy
+from app.database import Base, engine, get_db, auto_migrate_sqlite
+from app.models import DBClaim, DBDocument, DBPolicy, DBUser
 from app.vector_store import seed_regulatory_knowledge
 from app.api.claims import router as claims_router, seed_database_if_empty
 from app.api.documents import router as documents_router
 from app.api.copilot import router as copilot_router
 from app.api.audio import router as audio_router
+from app.api.auth import router as auth_router
 
-# Initialize SQLite database schema
+# Initialize SQLite database schema & auto-migrate missing columns
 Base.metadata.create_all(bind=engine)
+auto_migrate_sqlite()
 
 # Seed vector knowledge in ChromaDB
 seed_regulatory_knowledge()
@@ -37,6 +39,7 @@ app.add_middleware(
 )
 
 # Include API Routers
+app.include_router(auth_router)
 app.include_router(claims_router)
 app.include_router(documents_router)
 app.include_router(copilot_router)

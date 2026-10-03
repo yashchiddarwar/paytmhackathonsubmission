@@ -2,6 +2,49 @@ from sqlalchemy import Column, String, Integer, Float, Boolean, JSON, DateTime, 
 from sqlalchemy.sql import func
 from app.database import Base
 
+
+class DBUser(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    full_name = Column(String, nullable=True)
+    hashed_password = Column(String, nullable=False)
+    phone = Column(String, nullable=True, default=None)
+    ckyc = Column(String, nullable=True, default=None)
+    aadhaar_last4 = Column(String, nullable=True, default=None)
+    pan = Column(String, nullable=True, default=None)
+    nominee_name = Column(String, nullable=True, default=None)
+    nominee_relation = Column(String, nullable=True, default=None)
+    nominee_phone = Column(String, nullable=True, default=None)
+    member_tier = Column(String, nullable=True, default="Standard Member")
+    digilocker_synced = Column(Boolean, default=False)
+    mparivahan_synced = Column(Boolean, default=False)
+    abha_synced = Column(Boolean, default=False)
+    nicr_synced = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "fullName": self.full_name or self.email.split("@")[0],
+            "phone": self.phone,
+            "ckyc": self.ckyc,
+            "aadhaarLast4": self.aadhaar_last4,
+            "pan": self.pan,
+            "nomineeName": self.nominee_name,
+            "nomineeRelation": self.nominee_relation,
+            "nomineePhone": self.nominee_phone,
+            "memberTier": self.member_tier or "Standard Member",
+            "digilockerSynced": bool(self.digilocker_synced),
+            "mparivahanSynced": bool(self.mparivahan_synced),
+            "abhaSynced": bool(self.abha_synced),
+            "nicrSynced": bool(self.nicr_synced),
+            "isActive": self.is_active,
+            "createdAt": self.created_at.isoformat() if self.created_at else None,
+        }
+
 class DBPolicy(Base):
     __tablename__ = "policies"
     id = Column(String, primary_key=True, index=True)
@@ -34,6 +77,7 @@ class DBPolicy(Base):
 class DBClaim(Base):
     __tablename__ = "claims"
     id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, nullable=True, index=True)  # null = legacy seed data
     claim_number = Column(String, unique=True, index=True)
     policy_number = Column(String)
     vehicle = Column(String)
