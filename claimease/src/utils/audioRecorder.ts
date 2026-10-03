@@ -186,10 +186,16 @@ export class AudioRecordingService {
     const accumulatedText = this.currentTranscript.trim();
 
     return new Promise((resolve) => {
+      // If user speech was already transcribed live by Web Speech API, use it directly
+      if (accumulatedText) {
+        this.cleanup();
+        return resolve(accumulatedText);
+      }
+
       // If we don't have a mediaRecorder or no chunks recorded
       if (!this.mediaRecorder || this.audioChunks.length === 0) {
         this.cleanup();
-        return resolve(accumulatedText);
+        return resolve("");
       }
 
       const recorder = this.mediaRecorder;

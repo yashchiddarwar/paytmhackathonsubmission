@@ -67,5 +67,5 @@ def transcribe_audio_endpoint(payload: TranscribeRequest):
         raise HTTPException(status_code=400, detail="audioBase64 is required")
 
     return {
-        "text": "Commercial truck grazed front right bumper and headlamp on the Outer Ring Road near Koramangala signal. Driver did not stop."
+        "text": ""
     }

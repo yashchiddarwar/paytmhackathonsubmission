@@ -154,14 +154,20 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
       setIncidentMicError(null);
       try {
         const transcript = await audioIncidentRecorder.current.stopAndTranscribe();
-        if (transcript.trim()) {
-          setIncidentText(prev => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
+        if (transcript && transcript.trim()) {
+          const cleanText = transcript.trim();
+          setIncidentText(prev => {
+            if (!prev || !prev.trim()) return cleanText;
+            if (prev.includes(cleanText)) return prev;
+            if (cleanText.includes(prev.trim())) return cleanText;
+            return `${prev.trim()} ${cleanText}`;
+          });
         } else {
-          setIncidentMicError('No clear speech detected. Speak closer to your mic or select an instant voice preset.');
+          setIncidentMicError('No speech detected. Please speak clearly into your microphone.');
         }
       } catch (err: any) {
         console.warn('Incident transcription warning:', err);
-        setIncidentMicError('Voice capture completed. You can edit text or select a voice preset below.');
+        setIncidentMicError(err.message || 'Voice capture error.');
       } finally {
         setIsTranscribingIncident(false);
       }
@@ -171,13 +177,13 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
         await audioIncidentRecorder.current.startRecording(
           (sec) => setRecordingSecondsIncident(sec),
           (liveText) => {
-            if (liveText) setIncidentText(liveText);
+            if (liveText && liveText.trim()) setIncidentText(liveText);
           }
         );
         setIsRecordingIncident(true);
       } catch (err: any) {
-        console.warn('Microphone stream error, automatically initiating voice simulation demo:', err);
-        simulateVoiceDictation("Yesterday around 4:30 PM on Outer Ring Road, a commercial tempo grazed my right rear quarter panel while changing lanes. Minor dent and deep scratches along wheel arch; taillight housing cracked. Insured party details exchanged cleanly.");
+        console.warn('Microphone stream error:', err);
+        setIncidentMicError('Microphone permission denied or not available.');
       }
     }
   };
@@ -190,8 +196,14 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
       setChatMicError(null);
       try {
         const transcript = await audioChatRecorder.current.stopAndTranscribe();
-        if (transcript.trim()) {
-          setInputText(prev => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
+        if (transcript && transcript.trim()) {
+          const cleanText = transcript.trim();
+          setInputText(prev => {
+            if (!prev || !prev.trim()) return cleanText;
+            if (prev.includes(cleanText)) return prev;
+            if (cleanText.includes(prev.trim())) return cleanText;
+            return `${prev.trim()} ${cleanText}`;
+          });
         }
       } catch (err: any) {
         setChatMicError(err.message || 'Could not transcribe speech.');
@@ -204,13 +216,13 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
         await audioChatRecorder.current.startRecording(
           (sec) => setRecordingSecondsChat(sec),
           (liveText) => {
-            if (liveText) setInputText(liveText);
+            if (liveText && liveText.trim()) setInputText(liveText);
           }
         );
         setIsRecordingChat(true);
       } catch (err: any) {
-        console.warn('Chat mic access error, simulating query:', err);
-        setInputText("Is bumper replacement covered with zero depreciation under my policy?");
+        console.warn('Chat mic access error:', err);
+        setChatMicError('Microphone permission denied or not available.');
       }
     }
   };

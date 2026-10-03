@@ -116,11 +116,22 @@ export const ClaimHelperChatbot: React.FC<ClaimHelperChatbotProps> = ({
       setMicError(null);
       try {
         const transcript = await audioService.current.stopAndTranscribe();
-        if (transcript.trim()) {
+        if (transcript && transcript.trim()) {
+          const cleanText = transcript.trim();
           if (activeTab === 'chat') {
-            setInput(prev => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
+            setInput(prev => {
+              if (!prev || !prev.trim()) return cleanText;
+              if (prev.includes(cleanText)) return prev;
+              if (cleanText.includes(prev.trim())) return cleanText;
+              return `${prev.trim()} ${cleanText}`;
+            });
           } else {
-            setIncidentText(prev => (prev ? `${prev} ${transcript.trim()}` : transcript.trim()));
+            setIncidentText(prev => {
+              if (!prev || !prev.trim()) return cleanText;
+              if (prev.includes(cleanText)) return prev;
+              if (cleanText.includes(prev.trim())) return cleanText;
+              return `${prev.trim()} ${cleanText}`;
+            });
           }
         }
       } catch (err: any) {
@@ -134,18 +145,16 @@ export const ClaimHelperChatbot: React.FC<ClaimHelperChatbotProps> = ({
         await audioService.current.startRecording(
           (sec) => setRecordingSeconds(sec),
           (liveText) => {
-            if (activeTab === 'chat') setInput(liveText);
-            else setIncidentText(liveText);
+            if (liveText && liveText.trim()) {
+              if (activeTab === 'chat') setInput(liveText);
+              else setIncidentText(liveText);
+            }
           }
         );
         setIsRecording(true);
       } catch (err: any) {
-        console.warn('Microphone stream error in chatbot, providing quick speech query:', err);
-        if (activeTab === 'chat') {
-          setInput('Is my zero-depreciation add-on applicable for plastic bumper replacement?');
-        } else {
-          setIncidentText('Car collision at Ring Road signal. Front bumper cracked and headlamp damaged.');
-        }
+        console.warn('Microphone stream error in chatbot:', err);
+        setMicError('Microphone access denied or not supported in this browser.');
         setIsRecording(false);
       }
     }
