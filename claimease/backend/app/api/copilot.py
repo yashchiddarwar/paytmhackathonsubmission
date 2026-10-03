@@ -1,6 +1,6 @@
 import json
 import random
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException
 from sqlalchemy.orm import Session
 from app.database import get_db, SessionLocal
@@ -9,6 +9,30 @@ from app.schemas import ChatRequest, ChatResponse
 from app.chains.pilot_chain import generate_copilot_response
 
 router = APIRouter(tags=["Copilot"])
+
+@router.get("/api/ai/chat/history")
+def get_chat_history(claim_id: Optional[str] = None, limit: int = 100, db: Session = Depends(get_db)):
+    """
+    Retrieve stored chat interactions with AI Copilot, optionally filtered by claimId.
+    """
+    query = db.query(DBChatHistory)
+    if claim_id:
+        query = query.filter((DBChatHistory.claim_id == claim_id) | (DBChatHistory.claim_id == "general"))
+    records = query.order_by(DBChatHistory.timestamp.asc()).limit(limit).all()
+    return [r.to_dict() for r in records]
+
+@router.delete("/api/ai/chat/history")
+def clear_chat_history(claim_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    Clear stored chat interactions.
+    """
+    query = db.query(DBChatHistory)
+    if claim_id:
+        query = query.filter(DBChatHistory.claim_id == claim_id)
+    query.delete(synchronize_session=False)
+    db.commit()
+    return {"message": "Chat history cleared successfully"}
+
 
 @router.post("/api/ai/chat")
 def chat_copilot(req: ChatRequest, db: Session = Depends(get_db)):

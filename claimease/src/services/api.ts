@@ -221,4 +221,51 @@ export async function synthesizeTTS(text: string, voice = 'af'): Promise<Blob> {
   return await res.blob();
 }
 
+export async function activateClaim(claimId: string): Promise<DBClaim | null> {
+  try {
+    const res = await fetch(`/api/claims/${claimId}/activate`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to activate claim');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error activating claim:', err);
+    return null;
+  }
+}
+
+export async function fetchChatHistory(claimId?: string): Promise<any[]> {
+  try {
+    const url = claimId ? `/api/ai/chat/history?claim_id=${encodeURIComponent(claimId)}` : '/api/ai/chat/history';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch chat history');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error fetching chat history:', err);
+    return [];
+  }
+}
+
+export async function fetchIncidentConversions(): Promise<any[]> {
+  try {
+    const res = await fetch('/api/ai/incident-conversions');
+    if (!res.ok) throw new Error('Failed to fetch incident conversions');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error fetching incident conversions:', err);
+    return [];
+  }
+}
+
+export async function clearChatHistory(claimId?: string): Promise<boolean> {
+  try {
+    const url = claimId ? `/api/ai/chat/history?claim_id=${encodeURIComponent(claimId)}` : '/api/ai/chat/history';
+    const res = await fetch(url, { method: 'DELETE' });
+    return res.ok;
+  } catch (err) {
+    console.warn('Error clearing chat history:', err);
+    return false;
+  }
+}
+
+
+
 

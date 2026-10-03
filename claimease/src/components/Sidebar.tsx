@@ -6,13 +6,15 @@ interface SidebarProps {
   onNavigate: (screen: ScreenType) => void;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  activeClaim?: any;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeScreen,
   onNavigate,
   isOpenMobile,
-  onCloseMobile
+  onCloseMobile,
+  activeClaim
 }) => {
   const navItems: { id: ScreenType; label: string; icon: string }[] = [
     { id: 'home', label: 'Home', icon: 'dashboard' },
@@ -78,9 +80,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <span>{item.label}</span>
                   {item.id === 'my-claims' && (
                     <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                      isActive ? 'bg-[#151F00]/20 text-[#151F00]' : 'bg-[#C5F258]/20 text-[#C5F258]'
+                      activeClaim
+                        ? (isActive ? 'bg-[#151F00]/20 text-[#151F00]' : 'bg-[#C5F258]/20 text-[#C5F258]')
+                        : 'bg-zinc-800 text-zinc-500'
                     }`}>
-                      1 Active
+                      {activeClaim ? '1 Active' : '0 Active'}
                     </span>
                   )}
                 </button>

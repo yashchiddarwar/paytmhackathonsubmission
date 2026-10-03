@@ -6,13 +6,15 @@ interface HeaderProps {
   onNavigate: (screen: ScreenType) => void;
   onOpenSearch: () => void;
   onToggleMobileMenu: () => void;
+  activeClaim?: any;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   activeScreen,
   onNavigate,
   onOpenSearch,
-  onToggleMobileMenu
+  onToggleMobileMenu,
+  activeClaim
 }) => {
   return (
     <header className="fixed top-0 left-0 lg:left-64 right-0 h-16 bg-[#131313]/90 backdrop-blur-xl border-b border-white/[0.08] z-40 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4">
@@ -27,9 +29,13 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1C1B1B] border border-white/[0.08]">
-          <span className="w-2 h-2 rounded-full bg-[#C5F258] animate-pulse"></span>
-          <span className="text-xs text-zinc-300 font-medium">Ready to file</span>
-          <span className="hidden sm:inline text-zinc-500 font-mono text-[11px]">• MOT-9284-IN</span>
+          <span className={`w-2 h-2 rounded-full ${activeClaim ? 'bg-[#C5F258] animate-pulse' : 'bg-zinc-500'}`}></span>
+          <span className="text-xs text-zinc-300 font-medium">
+            {activeClaim ? 'Active Claim' : 'Clean Account'}
+          </span>
+          {activeClaim && (
+            <span className="hidden sm:inline text-zinc-500 font-mono text-[11px]">• {activeClaim.claimNumber}</span>
+          )}
         </div>
       </div>
 
