@@ -7,6 +7,8 @@ coverage/
 .env*
 !.env.example
 
+package.json
+
 # Python & Virtual Environments
 __pycache__/
 *.py[cod]
