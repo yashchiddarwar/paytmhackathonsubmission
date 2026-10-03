@@ -1,6 +1,19 @@
 import { ClaimDocument, Policy, ClaimJourneyStep } from '../types';
 import { DBClaim } from '../../server/db';
 
+export function getAuthToken(): string | null {
+  return localStorage.getItem('claimease_token');
+}
+
+export function authHeaders(customHeaders: HeadersInit = {}): HeadersInit {
+  const token = getAuthToken();
+  const headers: Record<string, string> = { ...(customHeaders as Record<string, string>) };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 export async function fetchDbStatus() {
   try {
     const res = await fetch('/api/db/status');
@@ -275,6 +288,44 @@ export async function clearChatHistory(claimId?: string): Promise<boolean> {
     return res.ok;
   } catch (err) {
     console.warn('Error clearing chat history:', err);
+    return false;
+  }
+}
+
+export async function fetchPolicies(): Promise<Policy[]> {
+  try {
+    const res = await fetch('/api/policies');
+    if (!res.ok) throw new Error('Failed to fetch policies');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error fetching policies:', err);
+    return [];
+  }
+}
+
+export async function createPolicy(policyData: Partial<Policy>): Promise<Policy | null> {
+  try {
+    const res = await fetch('/api/policies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(policyData)
+    });
+    if (!res.ok) throw new Error('Failed to create policy');
+    return await res.json();
+  } catch (err) {
+    console.warn('Error creating policy:', err);
+    return null;
+  }
+}
+
+export async function deletePolicy(policyId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`/api/policies/${policyId}`, {
+      method: 'DELETE'
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn('Error deleting policy:', err);
     return false;
   }
 }

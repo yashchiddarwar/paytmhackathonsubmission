@@ -187,6 +187,56 @@ def seed_database_if_empty(db: Session):
             db.add(db_doc)
         db.commit()
 
+# --- POLICY REST ENDPOINTS ---
+
+@router.get("/api/policies")
+def list_policies(db: Session = Depends(get_db)):
+    seed_database_if_empty(db)
+    policies = db.query(DBPolicy).all()
+    # Check if there is an active claim in the system to reflect live connection
+    active_claim = db.query(DBClaim).filter(DBClaim.status != "submitted").order_by(DBClaim.created_at.desc()).first()
+    results = []
+    for p in policies:
+        d = p.to_dict()
+        if active_claim and (p.policy_number in active_claim.policy_number or p.id == "p-1"):
+            d["activeClaimId"] = active_claim.claim_number
+            d["status"] = "in-progress"
+        results.append(d)
+    return results
+
+
+@router.post("/api/policies", status_code=201)
+def create_policy(payload: Dict[str, Any], db: Session = Depends(get_db)):
+    seed_database_if_empty(db)
+    policy_id = f"p-{random.randint(100, 999)}"
+    policy = DBPolicy(
+        id=policy_id,
+        policy_number=payload.get("policyNumber") or f"POL-{random.randint(1000, 9999)}-IN",
+        carrier=payload.get("carrier") or "HDFC ERGO General Insurance",
+        product_name=payload.get("productName") or "Comprehensive Protection Package",
+        coverage_tier=payload.get("coverageTier") or "Comprehensive Tier 1",
+        deductible=payload.get("deductible") or "Standard Compulsory",
+        has_zero_dep=payload.get("hasZeroDep", True),
+        vehicle=payload.get("vehicle"),
+        sum_insured=payload.get("sumInsured"),
+        status=payload.get("status", "active")
+    )
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy.to_dict()
+
+
+@router.delete("/api/policies/{policy_id}")
+def delete_policy(policy_id: str, db: Session = Depends(get_db)):
+    pol = db.query(DBPolicy).filter(DBPolicy.id == policy_id).first()
+    if not pol:
+        raise HTTPException(status_code=404, detail="Policy not found")
+    db.delete(pol)
+    db.commit()
+    return {"success": True, "message": "Policy deleted"}
+
+
 # --- CLAIMS REST ENDPOINTS ---
 
 @router.get("/api/claims")

@@ -10,6 +10,8 @@ import { Header } from './components/Header';
 import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { DocumentPreviewModal } from './components/DocumentPreviewModal';
 import { ClaimHelperChatbot } from './components/ClaimHelperChatbot';
+import { AuthScreen } from './screens/AuthScreen';
+import { useAuth } from './context/AuthContext';
 
 import { HomeScreen } from './screens/HomeScreen';
 import { ExploreClaimsScreen } from './screens/ExploreClaimsScreen';
@@ -23,6 +25,7 @@ import { fetchActiveClaim, fetchDocuments } from './services/api';
 import { DBClaim } from '../server/db';
 
 export default function App() {
+  const { user, token, isLoading: authLoading } = useAuth();
   const [activeScreen, setActiveScreen] = useState<ScreenType>('home');
   const [claimStep, setClaimStep] = useState<ClaimJourneyStep>(2); // Default to Step 2 Verification
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -38,6 +41,8 @@ export default function App() {
   // Fetch initial active claim and documents from persistent DB
   const loadDatabaseData = async () => {
     try {
+      const headers: Record<string, string> = {};
+      if (token) headers['Authorization'] = `Bearer ${token}`;
       const claim = await fetchActiveClaim();
       if (claim) {
         setActiveClaim(claim);
@@ -123,6 +128,25 @@ export default function App() {
     }
   };
 
+  // Auth loading splash
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#0B0B0B] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-[#C5F258] flex items-center justify-center animate-pulse">
+            <span className="material-symbols-outlined text-[#0B0B0B] text-xl">shield_check</span>
+          </div>
+          <p className="text-[#555] text-sm">Loading ClaimEase…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show auth screen when not logged in
+  if (!user) {
+    return <AuthScreen />;
+  }
+
   return (
     <div className="bg-[#0B0B0B] text-[#E5E2E1] min-h-screen flex flex-col font-sans selection:bg-[#C5F258] selection:text-[#151F00]">
       {/* Toast Alert Banner */}
@@ -151,6 +175,7 @@ export default function App() {
           onOpenSearch={() => setIsSearchOpen(true)}
           onToggleMobileMenu={() => setIsMobileMenuOpen(prev => !prev)}
           activeClaim={activeClaim}
+          user={user}
         />
 
         {/* Primary Viewport Canvas */}
