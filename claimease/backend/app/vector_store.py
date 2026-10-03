@@ -1,7 +1,23 @@
+import socket
+from urllib.parse import urlparse
 import chromadb
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings
 from app.config import CHROMA_DIR, OLLAMA_BASE_URL, EMBEDDING_MODEL
+
+def is_ollama_reachable(base_url: str = OLLAMA_BASE_URL, timeout: float = 0.3) -> bool:
+    """Fast non-blocking TCP socket check to see if Ollama is running."""
+    try:
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 11434
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
 
 # Persistent local Chroma instance (stores on disk inside ./data/chroma_db)
 chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -77,12 +93,13 @@ def seed_regulatory_knowledge():
 
 def retrieve_claim_context(query: str, k: int = 2) -> str:
     """Performs local vector retrieval for RAG grounding."""
-    try:
-        docs = vector_store.similarity_search(query, k=k)
-        if docs:
-            return "\n\n".join([d.page_content for d in docs])
-    except Exception as e:
-        print(f"ChromaDB similarity search note: {e}")
+    if is_ollama_reachable():
+        try:
+            docs = vector_store.similarity_search(query, k=k)
+            if docs:
+                return "\n\n".join([d.page_content for d in docs])
+        except Exception as e:
+            print(f"ChromaDB similarity search note: {e}")
 
     # Fallback to keyword matching on local regulatory rules if vector search is warming up
     query_lower = query.lower()

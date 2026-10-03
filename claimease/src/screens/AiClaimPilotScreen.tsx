@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ScreenType, ChatMessage, ClaimDocument } from '../types';
-import { INITIAL_CHAT_MESSAGES, MOCK_DOCUMENTS } from '../data/mockData';
-import { sendClaimChatMessage, convertIncidentToJourney, synthesizeTTS } from '../services/api';
+import { MOCK_DOCUMENTS } from '../data/mockData';
+import { sendClaimChatMessage, convertIncidentToJourney, synthesizeTTS, fetchPolicies } from '../services/api';
 import { DBClaim } from '../../server/db';
 import { AudioRecordingService } from '../utils/audioRecorder';
 
@@ -20,38 +20,134 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
   onClaimCreated,
   activeClaim
 }) => {
-  // Brand new accounts start directly in the Initiation Deck
+  // Navigation mode: Chat Copilot vs Claim Initiation Deck
   const [activeMode, setActiveMode] = useState<'chat' | 'initiate'>(
-    activeClaim ? 'chat' : 'initiate'
+    activeClaim ? 'chat' : 'chat'
   );
   const [incidentText, setIncidentText] = useState('');
   
-  // Chat state
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'welcome-init',
-      sender: 'assistant',
-      timestamp: 'Just now',
-      text: activeClaim
-        ? `Hello! I'm your AI Claim Pilot. I'm actively monitoring your claim **${activeClaim.claimNumber}** (${activeClaim.vehicle}). Ask any question about your documents, estimates, or surveyor review.`
-        : `Welcome to ClaimEase! You're currently on a **brand-new account** with zero claims filed.\n\nYou can switch to the **Initiation Deck** above to speak or type an incident, and I'll immediately build your customized claim journey!`,
-      groundingContext: {
-        title: activeClaim ? "Claim Telemetry Grounding" : "ClaimEase Account Pilot",
-        details: activeClaim
-          ? `Grounded in active policy ${activeClaim.policyNumber}.`
-          : "Fresh account initialized. Ready for First Notice of Loss.",
-        claimId: activeClaim?.claimNumber,
-        stepNumber: activeClaim?.currentStep || 1
-      },
-      suggestedQueries: [
-        "How do I file my first motor claim?",
-        "What documents are required for accident damage?",
-        "Does my policy cover zero-depreciation?"
-      ]
+  // Policies from Database
+  const [policies, setPolicies] = useState<any[]>([]);
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
+
+  // Context Selection Mode: 'no_context' | 'policy' | 'claim'
+  const [contextMode, setContextMode] = useState<'no_context' | 'policy' | 'claim'>(
+    activeClaim ? 'claim' : 'no_context'
+  );
+  const [selectedPolicyNumber, setSelectedPolicyNumber] = useState<string>('none');
+  const [selectedInitiationPolicy, setSelectedInitiationPolicy] = useState<string>('none');
+
+  // Load Policies from API on mount
+  useEffect(() => {
+    let isMounted = true;
+    const loadPoliciesData = async () => {
+      setLoadingPolicies(true);
+      try {
+        const fetched = await fetchPolicies();
+        if (isMounted && fetched && fetched.length > 0) {
+          setPolicies(fetched);
+          if (activeClaim && activeClaim.policyNumber) {
+            setSelectedPolicyNumber(activeClaim.policyNumber);
+            setSelectedInitiationPolicy(activeClaim.policyNumber);
+          } else {
+            setSelectedPolicyNumber(fetched[0].policyNumber);
+            setSelectedInitiationPolicy('none');
+          }
+        }
+      } catch (err) {
+        console.warn('Could not fetch policies:', err);
+      } finally {
+        if (isMounted) setLoadingPolicies(false);
+      }
+    };
+    loadPoliciesData();
+    return () => { isMounted = false; };
+  }, [activeClaim]);
+
+  // Sync context mode when activeClaim changes
+  useEffect(() => {
+    if (activeClaim) {
+      setContextMode('claim');
     }
-  ]);
+  }, [activeClaim]);
+
+  // Current active policy object
+  const activePolicyObj = policies.find(p => p.policyNumber === selectedPolicyNumber) || policies[0];
+
+  // Build welcome message for current context
+  const getInitialMessage = (mode: 'no_context' | 'policy' | 'claim'): ChatMessage => {
+    if (mode === 'claim' && activeClaim) {
+      return {
+        id: 'welcome-claim',
+        sender: 'assistant',
+        timestamp: 'Just now',
+        text: `Hello! I'm your **AI Claim Pilot**, actively monitoring your claim **${activeClaim.claimNumber}** (${activeClaim.vehicle}).\n\n• **Current Stage**: Step ${activeClaim.currentStep || 2} — ${activeClaim.status.replace('_', ' ').toUpperCase()}\n• **Insurer**: ${activeClaim.insurer}\n• **Damages**: ${activeClaim.damages?.join(', ') || 'Under assessment'}\n\nAsk any question about your repair estimate, required documents, or surveyor sign-off.`,
+        groundingContext: {
+          title: "Claim Telemetry Grounding",
+          details: `Grounded in active claim ${activeClaim.claimNumber} with ${activeClaim.insurer}.`,
+          claimId: activeClaim.claimNumber,
+          stepNumber: activeClaim.currentStep || 2
+        },
+        suggestedQueries: [
+          "What documents are still pending for my claim?",
+          "How does zero-depreciation apply to my bumper and paint?",
+          "What are the next steps during surveyor inspection?"
+        ]
+      };
+    } else if (mode === 'policy' && activePolicyObj) {
+      const vInfo = activePolicyObj.vehicle?.makeModel ? ` for ${activePolicyObj.vehicle.makeModel}` : '';
+      return {
+        id: 'welcome-policy',
+        sender: 'assistant',
+        timestamp: 'Just now',
+        text: `Hello! I am your **AI Claim Pilot**, grounded in your active policy **${activePolicyObj.policyNumber}** (${activePolicyObj.productName}${vInfo}) with **${activePolicyObj.carrier}**.\n\n• **Coverage Tier**: ${activePolicyObj.coverageTier}\n• **Compulsory Deductible**: ${activePolicyObj.deductible}\n• **Zero Depreciation Endorsement**: ${activePolicyObj.hasZeroDep ? 'Active (100% parts covered)' : 'Standard Tariff'}\n\nAsk me about coverage entitlements, deductible clauses, or how to file a claim under this policy.`,
+        groundingContext: {
+          title: "Policy Specification Grounding",
+          details: `Grounded in statutory policy schedule ${activePolicyObj.policyNumber} (${activePolicyObj.carrier}).`,
+          claimId: activePolicyObj.policyNumber,
+          stepNumber: 1
+        },
+        suggestedQueries: [
+          `What is covered under my ${activePolicyObj.coverageTier} package?`,
+          "What is the procedure for cashless repairs under this policy?",
+          "What are the mandatory documents to initiate a claim?"
+        ]
+      };
+    } else {
+      return {
+        id: 'welcome-general',
+        sender: 'assistant',
+        timestamp: 'Just now',
+        text: `Welcome to **ClaimEase AI Claim Pilot**! You are currently in **General Insurance Mode** (No specific policy or claim linked).\n\nI can answer any questions regarding:\n• **Motor Claims**: Accident documentation, FIR vs General Diary (GD) rules, zero-depreciation benefits.\n• **Health Claims**: 1-hour cashless pre-authorization SLAs, room rent capping, reimbursement checklists.\n• **IRDAI Rights**: Protection of Policyholders' Interests (2024), 30-day settlement SLAs, and Insurance Ombudsman escalation.\n\nYou can ask any question freely, or switch to an active policy using the context selector above!`,
+        groundingContext: {
+          title: "IRDAI Statutory Knowledge Grounding",
+          details: "Grounded in IRDAI General Insurance Regulations and Indian Motor Tariff Guidelines.",
+          stepNumber: 1
+        },
+        suggestedQueries: [
+          "When is a Police FIR mandatory vs when is a GD entry enough?",
+          "What documents are required for an own-damage car claim?",
+          "How does cashless hospital pre-authorization work?",
+          "Can an insurer reject my claim if delay occurred?"
+        ]
+      };
+    }
+  };
+
+  // Chat state
+  const [messages, setMessages] = useState<ChatMessage[]>([getInitialMessage(contextMode)]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+
+  // Switch context handler
+  const handleSwitchContext = (newMode: 'no_context' | 'policy' | 'claim', policyNum?: string) => {
+    setContextMode(newMode);
+    if (policyNum) {
+      setSelectedPolicyNumber(policyNum);
+    }
+    const welcome = getInitialMessage(newMode);
+    setMessages([welcome]);
+  };
 
   // Audio Recording & Dictation States
   const [isRecordingIncident, setIsRecordingIncident] = useState(false);
@@ -99,7 +195,9 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
     }
   };
 
+  // Active claim documents
   const firDoc = activeClaim?.documents?.find(d => d.id === 'doc-fir') || MOCK_DOCUMENTS.find(d => d.id === 'doc-fir') || MOCK_DOCUMENTS[0];
+  const pendingDocInFocus = activeClaim?.documents?.find(d => !d.verified && d.status !== 'verified') || activeClaim?.documents?.[0] || firDoc;
 
   const audioIncidentRecorder = useRef<AudioRecordingService>(new AudioRecordingService());
   const audioChatRecorder = useRef<AudioRecordingService>(new AudioRecordingService());
@@ -114,7 +212,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
 
   const simulationTimerRef = useRef<any>(null);
 
-  // Simulated Voice Dictation with realistic speech timing and waveform feedback
+  // Simulated Voice Dictation
   const simulateVoiceDictation = (text: string) => {
     if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
     setIsRecordingIncident(true);
@@ -227,6 +325,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
     }
   };
 
+  // Send message
   const handleSendMessage = async (textToSend?: string) => {
     const q = (textToSend || inputText).trim();
     if (!q || isTyping) return;
@@ -242,10 +341,16 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
     setInputText('');
     setIsTyping(true);
 
+    const reqClaimId = contextMode === 'claim' ? activeClaim?.claimNumber : undefined;
+    const reqPolicyNum = contextMode === 'policy' && selectedPolicyNumber !== 'none' ? selectedPolicyNumber : undefined;
+    const isNoContext = contextMode === 'no_context' || (!reqClaimId && !reqPolicyNum);
+
     try {
       const response = await sendClaimChatMessage({
         message: q,
-        claimId: activeClaim?.claimNumber || 'MOT-9284-IN',
+        claimId: reqClaimId,
+        policyNumber: reqPolicyNum,
+        noContext: isNoContext,
         currentStep: activeClaim?.currentStep || 2
       });
 
@@ -260,23 +365,46 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
 
       setMessages(prev => [...prev, aiMsg]);
     } catch (err) {
-      // Fallback response
+      // Dynamic fallback
+      const qLower = q.toLowerCase();
+      let fallbackText = '';
+      let groundingDetails = '';
+      let suggested: string[] = [];
+
+      if (qLower.includes('fir') || qLower.includes('police') || qLower.includes('gd')) {
+        fallbackText = `### ⚖️ Police Documentation Guidelines\n\n• **Single-Vehicle Self-Damage**: An FIR is **not legally mandatory** if there is no third-party injury or property casualty.\n• **Third-Party Liability**: A Police Station General Diary (GD) entry or e-FIR under Section 154 CrPC is required.\n• Insurers cannot reject a genuine claim solely for lack of an FIR if an authorized surveyor verifies the physical impact.`;
+        groundingDetails = 'Indian Motor Tariff Section 154 & IRDAI Guidelines.';
+        suggested = ['How do I get an online GD entry?', 'What if the surveyor asks for an FIR?'];
+      } else if (qLower.includes('zero dep') || qLower.includes('depreciation') || qLower.includes('bumper')) {
+        fallbackText = `### 🛡️ Zero-Depreciation Protection (GR-33)\n\nUnder standard motor rules, insurers deduct 50% depreciation on plastic/rubber bumpers and 30% on fiberglass.\nWith your **Zero-Depreciation** add-on, 100% of replacement parts are covered by the insurer, leaving only the statutory compulsory deductible (₹1,000).`;
+        groundingDetails = 'Indian Motor Tariff General Regulation GR-33.';
+        suggested = ['What is the compulsory deductible?', 'Does zero dep cover consumables?'];
+      } else if (contextMode === 'claim' && activeClaim) {
+        fallbackText = `### 📋 Active Claim Assessment (${activeClaim.claimNumber})\n\nYour claim for the **${activeClaim.vehicle}** is currently at **Step ${activeClaim.currentStep || 2}** with ${activeClaim.insurer}.\nRegistered damages: ${activeClaim.damages?.join(', ') || 'Front Bumper Assembly'}.\nEnsure all replacement items in the workshop estimate correspond with physical impact points before surveyor final sign-off.`;
+        groundingDetails = `Grounded in active claim ${activeClaim.claimNumber}.`;
+        suggested = ['What documents are still pending?', 'When will surveyor inspection happen?'];
+      } else if (contextMode === 'policy' && activePolicyObj) {
+        fallbackText = `### 🛡️ Policy Assessment (${activePolicyObj.policyNumber})\n\nUnder your **${activePolicyObj.productName}** with **${activePolicyObj.carrier}** (${activePolicyObj.coverageTier}), zero depreciation is ${activePolicyObj.hasZeroDep ? 'active' : 'standard'}. Standard compulsory deductible: ${activePolicyObj.deductible}.`;
+        groundingDetails = `Grounded in policy ${activePolicyObj.policyNumber}.`;
+        suggested = ['How do I initiate a cashless claim?', 'What are the mandatory documents?'];
+      } else {
+        fallbackText = `### 🌐 IRDAI Regulatory Guidance\n\nUnder IRDAI regulations, claim settlement relies on timely incident intimation, proof of insurable interest, and certified repair or hospital bills.\n• Insurers must settle or repudiate claims within 30 days of receiving the surveyor report.\n• Claims cannot be rejected solely for delay if the delay was due to genuine unavoidable circumstances.`;
+        groundingDetails = "IRDAI Protection of Policyholders' Interests Regulations 2024.";
+        suggested = ['What documents are mandatory for accident claims?', 'When is a Police FIR required?'];
+      }
+
       const fallbackMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         sender: 'assistant',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: `Under IRDAI Motor Guidelines for policy ${activeClaim?.policyNumber || 'MOT-9284-IN'}: Your comprehensive package includes zero-depreciation coverage on fiber, plastic bumpers, and paint. Ensure station GD entry copy matches the incident date before cashless survey authorization.`,
+        text: fallbackText,
         groundingContext: {
           title: "ClaimEase Regulatory Grounding",
-          details: "Grounded against Indian Motor Tariff Schedule and HDFC ERGO Comprehensive Policy conditions.",
-          claimId: activeClaim?.claimNumber || 'MOT-9284-IN',
+          details: groundingDetails,
+          claimId: reqClaimId || reqPolicyNum,
           stepNumber: 2
         },
-        suggestedQueries: [
-          "How fast will the cashless garage be approved?",
-          "Do I need to pay any upfront deposit at Apex Autoworks?",
-          "What happens during surveyor inspection?"
-        ]
+        suggestedQueries: suggested
       };
       setMessages(prev => [...prev, fallbackMsg]);
     } finally {
@@ -284,12 +412,14 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
     }
   };
 
+  // Launch claim journey from Initiation Deck
   const handleLaunchClaimJourney = async () => {
     if (!incidentText.trim() || isConvertingIncident) return;
     setIsConvertingIncident(true);
 
     try {
-      const result = await convertIncidentToJourney(incidentText);
+      const polParam = selectedInitiationPolicy !== 'none' ? selectedInitiationPolicy : undefined;
+      const result = await convertIncidentToJourney(incidentText, polParam);
       setConversionResult(result);
       if (result.success && result.claim) {
         onClaimCreated?.(result.claim);
@@ -313,8 +443,12 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
           <span className="material-symbols-outlined text-[14px]">chevron_right</span>
           <span className="text-white font-semibold">
             {activeMode === 'chat'
-              ? (activeClaim ? `In-Claim Mode (${activeClaim.claimNumber})` : 'AI Copilot (Brand New Account)')
-              : (activeClaim ? 'New Claim Initiation Deck' : 'Claim Initiation Deck • Brand New Account')}
+              ? (contextMode === 'claim' && activeClaim
+                  ? `In-Claim Mode (${activeClaim.claimNumber})`
+                  : contextMode === 'policy' && activePolicyObj
+                  ? `Policy Mode (${activePolicyObj.carrier})`
+                  : 'General IRDAI Copilot Mode')
+              : 'Claim Initiation Deck (Voice & Text)'}
           </span>
         </div>
 
@@ -323,23 +457,25 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
           <div className="bg-[#1C1B1B] p-1 rounded-full border border-white/[0.08] flex items-center gap-1">
             <button
               onClick={() => setActiveMode('chat')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
                 activeMode === 'chat'
                   ? 'bg-[#DEB7FF] text-[#2D0050]'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              {activeClaim ? 'Active In-Claim Chat' : 'AI Copilot Chat'}
+              <span className="material-symbols-outlined text-[15px]">chat</span>
+              <span>AI Claim Pilot Chat</span>
             </button>
             <button
               onClick={() => setActiveMode('initiate')}
-              className={`px-3 py-1 rounded-full text-xs font-semibold transition-all ${
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all flex items-center gap-1.5 ${
                 activeMode === 'initiate'
                   ? 'bg-[#C5F258] text-[#151F00]'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              🎙️ Initiation Deck (Voice & Text)
+              <span className="material-symbols-outlined text-[15px]">mic</span>
+              <span>Initiation Deck (Voice & Text)</span>
             </button>
           </div>
 
@@ -347,36 +483,92 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
             <span className="w-2 h-2 rounded-full bg-[#C5F258] animate-pulse"></span>
             <span className="text-xs text-white font-medium">AI Pilot v2.4</span>
             <span className="text-zinc-600">•</span>
-            <span className="text-xs text-[#DEB7FF] font-semibold">Grounded Copilot</span>
+            <span className="text-xs text-[#DEB7FF] font-semibold">IRDAI Grounded</span>
           </div>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* MODE 1: IN-CLAIM CHAT COPILOT (SCREEN 7)                                  */}
+      {/* MODE 1: CHAT COPILOT WITH MULTI-CONTEXT SWITCHER                          */}
       {/* ========================================================================= */}
       {activeMode === 'chat' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* COLUMN 1: Conversation & Grounded Thread (7 cols) */}
           <div className="lg:col-span-7 flex flex-col gap-4">
-            <div className="flex items-center justify-between pb-1">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl md:text-3xl font-bold text-white font-display">AI Claim Pilot</h1>
-                  <span className="px-2 py-0.5 rounded-full bg-[#632D93]/60 border border-[#DEB7FF]/30 text-[#DEB7FF] text-[10px] font-bold uppercase">
-                    In-Claim Mode
-                  </span>
-                </div>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Ask anything about your claim. Grounded directly in your active filing telemetry.
-                </p>
+            
+            {/* Context Selector Bar */}
+            <div className="p-3 rounded-2xl bg-[#181818] border border-white/[0.08] flex flex-col gap-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[15px] text-[#DEB7FF]">tune</span>
+                  <span>Active Adjudication Context:</span>
+                </span>
+                <span className="text-[11px] text-zinc-500">Click to switch context</span>
               </div>
 
-              {/* Active Context Chip */}
-              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#1C1B1B] border border-white/[0.08] text-xs">
-                <span className="w-2 h-2 rounded-full bg-[#DEB7FF] animate-ping"></span>
-                <span className="text-zinc-400">Context:</span>
-                <span className="text-[#DEB7FF] font-semibold">FIR Investigation</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Option 1: General / No Context */}
+                <button
+                  type="button"
+                  onClick={() => handleSwitchContext('no_context')}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    contextMode === 'no_context'
+                      ? 'bg-[#632D93] text-[#DEB7FF] border border-[#DEB7FF]/40 shadow-sm'
+                      : 'bg-[#222] text-zinc-400 hover:text-white border border-white/5'
+                  }`}
+                >
+                  <span>🌐</span>
+                  <span>General Guidance (No Policy)</span>
+                </button>
+
+                {/* Option 2: Active Claim (if exists) */}
+                {activeClaim && (
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchContext('claim')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                      contextMode === 'claim'
+                        ? 'bg-[#C5F258] text-[#151F00] font-bold shadow-sm'
+                        : 'bg-[#222] text-zinc-400 hover:text-white border border-white/5'
+                    }`}
+                  >
+                    <span>📋</span>
+                    <span>Claim: {activeClaim.claimNumber}</span>
+                  </button>
+                )}
+
+                {/* Option 3: Policies from DB */}
+                {policies.map((p) => {
+                  const isSelected = contextMode === 'policy' && selectedPolicyNumber === p.policyNumber;
+                  const label = p.carrier.includes('HDFC') ? 'HDFC ERGO Motor' : (p.carrier.includes('Care') ? 'Care Health' : p.productName);
+                  return (
+                    <button
+                      key={p.id || p.policyNumber}
+                      type="button"
+                      onClick={() => handleSwitchContext('policy', p.policyNumber)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                        isSelected
+                          ? 'bg-[#DEB7FF] text-[#2D0050] font-bold shadow-sm'
+                          : 'bg-[#222] text-zinc-400 hover:text-white border border-white/5'
+                      }`}
+                    >
+                      <span>🛡️</span>
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Status Context Banner */}
+              <div className="pt-1 text-[11px] text-zinc-300 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-[#C5F258] shrink-0" />
+                <span>
+                  {contextMode === 'claim' && activeClaim
+                    ? `Telemetry Active: Claim ${activeClaim.claimNumber} • ${activeClaim.vehicle} (${activeClaim.insurer})`
+                    : contextMode === 'policy' && activePolicyObj
+                    ? `Policy Grounded: ${activePolicyObj.productName} • ${activePolicyObj.carrier} (${activePolicyObj.policyNumber})`
+                    : 'Universal Regulatory Mode: IRDAI Master Circulars & Consumer Protection Rules'}
+                </span>
               </div>
             </div>
 
@@ -414,7 +606,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                           <div className="flex items-center gap-2">
                             <span className="text-sm font-bold text-white">AI Claim Pilot</span>
                             <span className="px-2 py-0.5 rounded-full bg-[#632D93]/50 text-[#DEB7FF] text-[10px] font-semibold">
-                              Contextual Engine v2.4
+                              {contextMode === 'claim' ? 'Claim Mode v2.4' : contextMode === 'policy' ? 'Policy Mode v2.4' : 'General Mode v2.4'}
                             </span>
                           </div>
                         </div>
@@ -446,7 +638,13 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                       {/* Evaluated Under Pill */}
                       <div className="p-3 rounded-xl bg-[#2A2A2A] border border-white/[0.06] text-xs text-white flex items-center gap-2 z-10">
                         <span className="material-symbols-outlined text-[#C5F258] text-[18px]">verified</span>
-                        <span>Evaluating within: <strong className="text-[#C5F258]">{activeClaim ? activeClaim.policyType : 'IRDAI Statutory Policy Schedule (Fresh Account)'}</strong></span>
+                        <span>Evaluating within: <strong className="text-[#C5F258]">
+                          {contextMode === 'claim' && activeClaim
+                            ? `${activeClaim.policyType} (${activeClaim.claimNumber})`
+                            : contextMode === 'policy' && activePolicyObj
+                            ? `${activePolicyObj.carrier} • ${activePolicyObj.coverageTier}`
+                            : 'IRDAI Statutory Insurance Regulations (General Consumer Mode)'}
+                        </strong></span>
                       </div>
 
                       {/* Structured Response Text */}
@@ -463,7 +661,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                               <span>{msg.groundingContext.title}</span>
                             </div>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-[#632D93] text-[#DEB7FF]">
-                              Grounded Step
+                              Grounded
                             </span>
                           </div>
                           <p className="text-xs text-zinc-200 leading-relaxed">
@@ -500,7 +698,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
               {isTyping && (
                 <div className="p-4 rounded-2xl bg-[#201F1F] border border-white/10 flex items-center gap-3 text-xs text-zinc-400 animate-pulse">
                   <span className="material-symbols-outlined text-[18px] text-[#DEB7FF] animate-spin">sync</span>
-                  <span>AI Claim Pilot is evaluating your policy wording & IRDAI mandates...</span>
+                  <span>AI Claim Pilot is evaluating statutory IRDAI mandates...</span>
                 </div>
               )}
             </div>
@@ -508,8 +706,8 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
             {/* Input Bar */}
             <div className="mt-2 bg-[#1C1B1B] p-2.5 rounded-2xl border border-white/[0.12] focus-within:border-[#DEB7FF]/60 focus-within:shadow-[0_0_24px_-4px_rgba(222,183,255,0.25)] transition-all flex flex-col gap-2">
               <div className="flex items-center gap-2 px-2 pt-1 text-[11px] text-zinc-400">
-                <span className={`w-1.5 h-1.5 rounded-full ${activeClaim ? 'bg-[#C5F258]' : 'bg-[#DEB7FF]'}`}></span>
-                <span>Context: {activeClaim ? `${activeClaim.claimNumber} • Step ${activeClaim.currentStep || 2}` : 'Brand New Account • Zero Claims Filed'}</span>
+                <span className={`w-1.5 h-1.5 rounded-full ${contextMode === 'claim' ? 'bg-[#C5F258]' : contextMode === 'policy' ? 'bg-[#DEB7FF]' : 'bg-zinc-400'}`}></span>
+                <span>Context: {contextMode === 'claim' && activeClaim ? `Claim ${activeClaim.claimNumber} • Step ${activeClaim.currentStep || 2}` : contextMode === 'policy' && activePolicyObj ? `Policy ${activePolicyObj.policyNumber}` : 'General Consumer Guidance (No Policy)'}</span>
               </div>
               <form 
                 onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }}
@@ -546,9 +744,11 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                       ? `Recording audio... 00:${recordingSecondsChat < 10 ? `0${recordingSecondsChat}` : recordingSecondsChat}`
                       : isTranscribingChat
                       ? 'Transcribing your voice...'
-                      : activeClaim
+                      : contextMode === 'claim' && activeClaim
                       ? `Ask about claim ${activeClaim.claimNumber}...`
-                      : 'Ask about filing a claim, policy rules, or estimates...'
+                      : contextMode === 'policy' && activePolicyObj
+                      ? `Ask about policy ${activePolicyObj.policyNumber}...`
+                      : 'Ask about filing a claim, IRDAI rules, FIR requirements, or estimates...'
                   }
                   className="bg-transparent text-white placeholder-zinc-500 text-xs md:text-sm w-full outline-none px-2"
                 />
@@ -566,161 +766,242 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
             <div className="flex items-center justify-between text-[11px] text-zinc-500 px-2">
               <span className="flex items-center gap-1">
                 <span className="material-symbols-outlined text-[13px] text-[#C5F258]">lock</span>
-                Grounded exclusively on your claim dossier & statutory IRDAI mandates
+                Grounded on IRDAI statutory regulations & claims jurisprudence
               </span>
               <span>ClaimEase Pilot 2.4</span>
             </div>
           </div>
 
-          {/* COLUMN 2: Persistent Claim & Document State Panel (5 cols) */}
+          {/* COLUMN 2: Context-Aware Intelligence Sidebar (5 cols) */}
           <div className="lg:col-span-5 flex flex-col gap-4">
             <div className="p-5 rounded-3xl bg-[#141414] border border-white/[0.08] flex flex-col gap-4 shadow-xl">
-              {/* Panel Header */}
+              
+              {/* Header */}
               <div className="flex items-center justify-between pb-3 border-b border-white/[0.08]">
                 <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[#C5F258] text-[20px]">hub</span>
-                  <span className="text-sm font-bold text-white">Active Claim Context</span>
+                  <span className="material-symbols-outlined text-[#C5F258] text-[20px]">
+                    {contextMode === 'claim' ? 'hub' : contextMode === 'policy' ? 'shield' : 'auto_awesome'}
+                  </span>
+                  <span className="text-sm font-bold text-white">
+                    {contextMode === 'claim' ? 'Active Claim Telemetry' : contextMode === 'policy' ? 'Linked Policy Context' : 'IRDAI Knowledge Hub'}
+                  </span>
                 </div>
                 <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#1C1B1B] border border-[#C5F258]/30 text-[#C5F258] text-[11px] font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#C5F258] animate-pulse"></span>
-                  Syncing Real Time
+                  {contextMode === 'claim' ? 'In-Claim Sync' : contextMode === 'policy' ? 'Policy Active' : 'General Mode'}
                 </span>
               </div>
 
-              {/* CARD 1: Claim Summary */}
-              <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Active Policy & Claim</span>
-                  <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-[10px] font-bold">
-                    Step 2 of 4
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs pt-1">
-                  <div>
-                    <span className="text-zinc-500 block text-[10px]">Policy Category</span>
-                    <span className="text-white font-bold">Motor Insurance</span>
-                  </div>
-                  <div>
-                    <span className="text-zinc-500 block text-[10px]">Claim Incident</span>
-                    <span className="text-white font-bold">Accident Damage</span>
-                  </div>
-                  <div>
-                    <span className="text-zinc-500 block text-[10px]">Policy File</span>
-                    <span className="text-zinc-300 font-mono">MOT-9284-IN</span>
-                  </div>
-                  <div>
-                    <span className="text-zinc-500 block text-[10px]">Coverage Tier</span>
-                    <span className="text-zinc-300">Comprehensive B2B</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* CARD 2: Current Document Focus */}
-              <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="material-symbols-outlined text-[#DEB7FF] text-[18px]">assignment</span>
-                    <span className="text-xs font-bold text-white">Document in Focus</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/20 text-[#C5F258] text-[10px] font-bold">
-                    Required
-                  </span>
-                </div>
-                <div className="flex items-center justify-between p-3 rounded-xl bg-[#252424]">
-                  <div>
-                    <h5 className="text-xs font-bold text-white">FIR (First Information Report)</h5>
-                    <span className="text-[11px] text-zinc-400">Official police report copy</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full bg-[#FF823A]/15 text-[#FF823A] text-[10px] font-semibold">
-                    Not Uploaded
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-relaxed">
-                  Official jurisdictional police record establishing incident date, collision impact point, and verified third parties involved in the motor damage.
-                </p>
-              </div>
-
-              {/* CARD 3: Progression Pipeline */}
-              <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-3">
-                <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">FIR Progression Pipeline</span>
-                <div className="space-y-3 pt-1">
-                  <div className="flex items-start gap-3">
-                    <div className="w-6 h-6 rounded-full bg-[#DEB7FF] text-[#2D0050] flex items-center justify-center text-xs font-bold shrink-0">
-                      1
+              {/* VIEW A: IF IN CLAIM MODE AND ACTIVE CLAIM EXISTS */}
+              {contextMode === 'claim' && activeClaim && (
+                <>
+                  <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Claim Information</span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-[10px] font-bold">
+                        Step {activeClaim.currentStep || 2} of 4
+                      </span>
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                        <span>Understand Document Requirements</span>
-                        <span className="px-1.5 py-0.2 rounded text-[9px] bg-[#632D93] text-[#DEB7FF] font-bold">ACTIVE</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+                      <div>
+                        <span className="text-zinc-500 block text-[10px]">Claim Number</span>
+                        <span className="text-white font-bold">{activeClaim.claimNumber}</span>
                       </div>
-                      <p className="text-[11px] text-zinc-400 mt-0.5">Clarify police jurisdiction & format details.</p>
+                      <div>
+                        <span className="text-zinc-500 block text-[10px]">Vehicle / Asset</span>
+                        <span className="text-white font-bold truncate block">{activeClaim.vehicle}</span>
+                      </div>
+                      <div>
+                        <span className="text-zinc-500 block text-[10px]">Insurer</span>
+                        <span className="text-zinc-300 truncate block">{activeClaim.insurer}</span>
+                      </div>
+                      <div>
+                        <span className="text-zinc-500 block text-[10px]">Policy Ref</span>
+                        <span className="text-zinc-300 font-mono truncate block">{activeClaim.policyNumber}</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-start gap-3 opacity-75">
-                    <div className="w-6 h-6 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center text-xs font-bold shrink-0">
-                      2
+                  {/* Document Focus Card */}
+                  <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="material-symbols-outlined text-[#DEB7FF] text-[18px]">assignment</span>
+                        <span className="text-xs font-bold text-white">Document in Focus</span>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        pendingDocInFocus.verified ? 'bg-[#C5F258]/20 text-[#C5F258]' : 'bg-[#FF823A]/15 text-[#FF823A]'
+                      }`}>
+                        {pendingDocInFocus.verified ? 'Verified' : 'Action Required'}
+                      </span>
                     </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-semibold text-zinc-300">Obtain from Local Police Station / CCTNS</span>
-                      <p className="text-[11px] text-zinc-400 mt-0.5">Request signed copy or digital certificate.</p>
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-[#252424]">
+                      <div>
+                        <h5 className="text-xs font-bold text-white">{pendingDocInFocus.name}</h5>
+                        <span className="text-[11px] text-zinc-400">{pendingDocInFocus.code}</span>
+                      </div>
+                      <span className="text-[11px] font-mono text-[#C5F258]">
+                        {pendingDocInFocus.readiness || 'Pending'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      {pendingDocInFocus.description || 'Statutory requirement for surveyor verification and claim pre-approval.'}
+                    </p>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex flex-col gap-2 pt-1">
+                    <button
+                      onClick={() => onNavigate('check-document')}
+                      className="w-full py-3 px-4 rounded-full bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center justify-center gap-2 shadow-[0_4px_20px_-2px_rgba(197,242,88,0.35)] transition-all"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">document_scanner</span>
+                      <span>Check My Document</span>
+                    </button>
+
+                    <button
+                      onClick={onResumeClaim}
+                      className="w-full py-2.5 px-4 rounded-full bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors border border-white/10"
+                    >
+                      <span>Resume Claim Workflow</span>
+                      <span className="material-symbols-outlined text-[15px]">arrow_forward</span>
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* VIEW B: IF IN POLICY MODE */}
+              {contextMode === 'policy' && activePolicyObj && (
+                <>
+                  <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Policy Specification</span>
+                      <span className="px-2 py-0.5 rounded-full bg-[#DEB7FF]/15 text-[#DEB7FF] text-[10px] font-bold">
+                        Active Policy
+                      </span>
+                    </div>
+                    <div className="space-y-2 text-xs pt-1">
+                      <div>
+                        <span className="text-zinc-500 block text-[10px]">Product & Carrier</span>
+                        <span className="text-white font-bold">{activePolicyObj.productName}</span>
+                        <span className="text-zinc-400 block text-[11px]">{activePolicyObj.carrier}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <div>
+                          <span className="text-zinc-500 block text-[10px]">Policy Number</span>
+                          <span className="text-zinc-300 font-mono">{activePolicyObj.policyNumber}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500 block text-[10px]">Coverage Tier</span>
+                          <span className="text-zinc-300">{activePolicyObj.coverageTier}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500 block text-[10px]">Compulsory Deductible</span>
+                          <span className="text-zinc-300">{activePolicyObj.deductible}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500 block text-[10px]">Zero Depreciation</span>
+                          <span className={activePolicyObj.hasZeroDep ? 'text-[#C5F258] font-semibold' : 'text-zinc-400'}>
+                            {activePolicyObj.hasZeroDep ? '✓ 100% Covered' : 'Standard'}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-start gap-3 opacity-50">
-                    <div className="w-6 h-6 rounded-full bg-zinc-800 text-zinc-500 flex items-center justify-center text-xs font-bold shrink-0">
-                      3
+                  <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-2.5">
+                    <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Policy Guidance Notes</span>
+                    <p className="text-xs text-zinc-300 leading-relaxed">
+                      This policy schedule includes direct electronic claim filing, cashless network billing, and Section 64-VB compliance endorsement.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        setSelectedInitiationPolicy(activePolicyObj.policyNumber);
+                        setActiveMode('initiate');
+                      }}
+                      className="w-full py-3 px-4 rounded-full bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                      <span>Initiate Claim for this Policy</span>
+                    </button>
+                    <button
+                      onClick={() => handleSwitchContext('no_context')}
+                      className="w-full py-2 px-4 text-center text-xs text-zinc-400 hover:text-white transition-colors"
+                    >
+                      Switch to General Mode →
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* VIEW C: IF IN GENERAL / NO CONTEXT MODE */}
+              {(contextMode === 'no_context' || (!activeClaim && contextMode === 'claim')) && (
+                <>
+                  <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <span className="material-symbols-outlined text-[#C5F258] text-[18px]">gavel</span>
+                      <span>IRDAI Adjudication Standards</span>
                     </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-medium text-zinc-400">Upload Document for Diagnostics</span>
-                      <p className="text-[11px] text-zinc-500 mt-0.5">PDF, JPEG, or camera scan upload.</p>
+                    <div className="space-y-2.5 text-xs text-zinc-300">
+                      <div className="p-2.5 rounded-xl bg-[#222] border border-white/5">
+                        <strong className="text-white block text-[11px] mb-0.5">⏱️ 30-Day Settlement SLA</strong>
+                        <span className="text-zinc-400 text-[11px] leading-snug block">Insurers must clear or reject claims within 30 days of surveyor report. Penal interest applies for delays.</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-[#222] border border-white/5">
+                        <strong className="text-white block text-[11px] mb-0.5">📜 Delay Protection Rule</strong>
+                        <span className="text-zinc-400 text-[11px] leading-snug block">Claims cannot be rejected solely for intimation delays if the cause was genuine and verifiable.</span>
+                      </div>
+                      <div className="p-2.5 rounded-xl bg-[#222] border border-white/5">
+                        <strong className="text-white block text-[11px] mb-0.5">🏛️ Insurance Ombudsman</strong>
+                        <span className="text-zinc-400 text-[11px] leading-snug block">Policyholders can escalate unresolved disputes up to ₹50 Lakhs free of charge.</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="flex items-start gap-3 opacity-40">
-                    <div className="w-6 h-6 rounded-full bg-zinc-800 text-zinc-500 flex items-center justify-center text-xs font-bold shrink-0">
-                      4
+                  {/* Quick Policy Switchers if policies exist */}
+                  {policies.length > 0 && (
+                    <div className="p-4 rounded-2xl bg-[#1C1B1B] border border-white/[0.06] flex flex-col gap-2.5">
+                      <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-bold">Link Policy to Chat</span>
+                      <div className="flex flex-col gap-1.5">
+                        {policies.map(p => (
+                          <button
+                            key={p.id || p.policyNumber}
+                            onClick={() => handleSwitchContext('policy', p.policyNumber)}
+                            className="p-2.5 rounded-xl bg-[#252424] hover:bg-[#303030] text-left transition-colors flex items-center justify-between group"
+                          >
+                            <div className="min-w-0">
+                              <span className="text-xs font-semibold text-white truncate block">{p.productName}</span>
+                              <span className="text-[10px] text-zinc-400">{p.carrier} • {p.policyNumber}</span>
+                            </div>
+                            <span className="material-symbols-outlined text-[16px] text-zinc-500 group-hover:text-[#DEB7FF]">arrow_forward</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-medium text-zinc-400">Verify with Diagnostic Engine</span>
-                      <p className="text-[11px] text-zinc-500 mt-0.5">Instant compliance scan before insurer submission.</p>
-                    </div>
+                  )}
+
+                  <div className="flex flex-col gap-2 pt-1">
+                    <button
+                      onClick={() => setActiveMode('initiate')}
+                      className="w-full py-3 px-4 rounded-full bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                      <span>Initiate New Claim Journey</span>
+                    </button>
                   </div>
-                </div>
-              </div>
+                </>
+              )}
 
-              {/* CARD 4: Actions */}
-              <div className="flex flex-col gap-2 pt-1">
-                <button
-                  onClick={() => onNavigate('check-document')}
-                  className="w-full py-3 px-4 rounded-full bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00] font-bold text-xs flex items-center justify-center gap-2 shadow-[0_4px_20px_-2px_rgba(197,242,88,0.35)] transition-all"
-                >
-                  <span className="material-symbols-outlined text-[18px]">document_scanner</span>
-                  <span>Check My Document</span>
-                </button>
-
-                <button
-                  onClick={() => onSelectDocument?.(firDoc)}
-                  className="w-full py-2.5 px-4 rounded-full bg-zinc-800 hover:bg-zinc-700 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors border border-white/10"
-                >
-                  <span>View Sample FIR Specimen</span>
-                  <span className="material-symbols-outlined text-[15px]">north_east</span>
-                </button>
-
-                <button
-                  onClick={onResumeClaim}
-                  className="w-full py-2 px-4 text-center text-xs text-zinc-400 hover:text-[#C5F258] transition-colors"
-                >
-                  Resume Active Claim Workflow →
-                </button>
-              </div>
             </div>
           </div>
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* MODE 2: INITIATE CLAIM DECK (SCREEN 1)                                    */}
+      {/* MODE 2: INITIATE CLAIM DECK WITH ACCURATE POLICY SELECTOR                 */}
       {/* ========================================================================= */}
       {activeMode === 'initiate' && (
         <div className="flex flex-col gap-8">
@@ -737,7 +1018,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                 Initiate Your AI Claim Journey
               </h1>
               <p className="text-zinc-400 text-sm md:text-base leading-relaxed">
-                Describe what happened in your own words or select your active policy. AI Claim Pilot will instantly assemble your personalized document roadmap, pre-empt insurer objections, and guide you step-by-step to a guaranteed compliant submission.
+                Describe what happened in your own words, dictate by voice, or select your policy. AI Claim Pilot will instantly assemble your personalized document roadmap, pre-empt insurer objections, and guide you step-by-step.
               </p>
             </div>
           </div>
@@ -748,148 +1029,97 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
             <div className="lg:col-span-7 flex flex-col gap-6">
               <div className="rounded-3xl bg-[#1C1B1B] p-6 border border-white/[0.08] shadow-xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#C5F258] via-[#DEB7FF] to-[#FFB691]" />
-                
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-full bg-[#632D93]/40 flex items-center justify-center text-[#DEB7FF] border border-[#DEB7FF]/30">
-                      <span className="material-symbols-outlined text-[20px]">record_voice_over</span>
+
+                {/* Header with Live Voice Action */}
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-[#632D93]/40 border border-[#DEB7FF]/30 flex items-center justify-center text-[#DEB7FF]">
+                      <span className="material-symbols-outlined text-[22px]">record_voice_over</span>
                     </div>
                     <div>
-                      <h2 className="text-base font-bold text-white flex items-center gap-2">
-                        <span>Incident Voice & Speech Dictation</span>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-base font-bold text-white">Incident Voice & Speech Dictation</h3>
                         <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-[10px] font-bold">
                           AI Dictate Active
                         </span>
-                      </h2>
-                      <p className="text-xs text-zinc-400">Speak or type naturally. AI speech engine converts your voice into statutory claim dossier.</p>
+                      </div>
+                      <p className="text-xs text-zinc-400">
+                        Speak or type naturally. AI speech engine converts your voice into statutory claim dossier.
+                      </p>
                     </div>
                   </div>
-                  <span className="text-xs px-2.5 py-1 rounded-full bg-[#2A2A2A] text-zinc-300 flex items-center gap-1 self-start sm:self-center">
-                    <span className="material-symbols-outlined text-[13px] text-[#C5F258]">lock</span>
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 border border-white/10 text-xs text-zinc-300">
+                    <span className="material-symbols-outlined text-[14px] text-[#C5F258]">lock</span>
                     <span>Encrypted Speech</span>
-                  </span>
-                </div>
-
-                {/* Primary Voice Dictation Toolbar */}
-                <div className="p-3.5 rounded-2xl bg-[#141414] border border-white/[0.08] mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <button
-                      type="button"
-                      onClick={toggleIncidentDictation}
-                      className={`px-4 py-2.5 rounded-full font-bold text-xs flex items-center gap-2 transition-all shadow-md active:scale-95 ${
-                        isRecordingIncident
-                          ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                          : 'bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00]'
-                      }`}
-                    >
-                      <span className="material-symbols-outlined text-[18px]">
-                        {isRecordingIncident ? 'stop' : 'mic'}
-                      </span>
-                      <span>{isRecordingIncident ? 'Stop & Transcribe Spoken Audio' : '🎙️ Dictate Incident by Voice'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => simulateVoiceDictation("Yesterday around 4:30 PM on Outer Ring Road, a commercial tempo grazed my right rear quarter panel while changing lanes. Minor dent and deep scratches along wheel arch; taillight housing cracked. Insured party details exchanged cleanly.")}
-                      className="px-3.5 py-2.5 rounded-full bg-[#201F1F] hover:bg-[#632D93]/50 text-zinc-300 hover:text-white border border-white/10 font-medium text-xs flex items-center gap-1.5 transition-all"
-                      title="Simulates real microphone dictation with sound waves and typing"
-                    >
-                      <span className="material-symbols-outlined text-[16px] text-[#DEB7FF]">play_circle</span>
-                      <span>⚡ Instant Voice Demo</span>
-                    </button>
-                  </div>
-
-                  {/* Audio Waves / Recording Status */}
-                  <div className="flex items-center gap-2">
-                    {isRecordingIncident ? (
-                      <div className="flex items-center gap-2 px-3 py-1.5 bg-red-950/70 border border-red-500/40 rounded-full animate-pulse">
-                        <div className="flex items-center gap-1 h-4">
-                          <span className="w-1 bg-red-400 rounded-full animate-bounce h-2"></span>
-                          <span className="w-1 bg-red-400 rounded-full animate-pulse h-4"></span>
-                          <span className="w-1 bg-red-400 rounded-full animate-bounce h-3"></span>
-                          <span className="w-1 bg-red-400 rounded-full animate-pulse h-4"></span>
-                          <span className="w-1 bg-red-400 rounded-full animate-bounce h-2"></span>
-                        </div>
-                        <span className="text-xs font-mono font-bold text-red-200">
-                          00:{recordingSecondsIncident < 10 ? `0${recordingSecondsIncident}` : recordingSecondsIncident}
-                        </span>
-                        <span className="text-[11px] text-red-300">Listening...</span>
-                      </div>
-                    ) : (
-                      <div className="hidden sm:flex items-center gap-1.5 text-xs text-zinc-500 font-mono">
-                        <span className="w-2 h-2 rounded-full bg-[#C5F258]"></span>
-                        <span>Mic Ready</span>
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                {/* Live Recording State Banner */}
-                {isRecordingIncident && (
-                  <div className="mb-3 p-3.5 rounded-2xl bg-gradient-to-r from-[#2B0E1E] via-[#201426] to-[#141414] border border-red-500/50 flex items-center justify-between gap-3 animate-fade-in shadow-xl">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-3.5 h-3.5 rounded-full bg-red-500 animate-ping shrink-0" />
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-white">Recording & Live Transcribing</span>
-                          <span className="text-[11px] font-mono text-red-400 font-bold bg-black/40 px-2 py-0.5 rounded">
-                            00:{recordingSecondsIncident < 10 ? `0${recordingSecondsIncident}` : recordingSecondsIncident}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-zinc-300 truncate">
-                          Speak naturally into your microphone or watch the voice dictation stream into the box below.
-                        </p>
-                      </div>
+                {/* Recording Controls */}
+                <div className="flex flex-wrap items-center gap-3 mb-5">
+                  <button
+                    type="button"
+                    onClick={toggleIncidentDictation}
+                    className={`px-5 py-3 rounded-full font-bold text-xs flex items-center gap-2.5 transition-all shadow-md ${
+                      isRecordingIncident
+                        ? 'bg-red-500 text-white animate-pulse'
+                        : 'bg-[#C5F258] hover:bg-[#b8e748] text-[#151F00]'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[18px]">
+                      {isRecordingIncident ? 'stop' : 'mic'}
+                    </span>
+                    <span>
+                      {isRecordingIncident
+                        ? `Recording Speech... 00:${recordingSecondsIncident < 10 ? `0${recordingSecondsIncident}` : recordingSecondsIncident}`
+                        : 'Dictate Incident by Voice'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => simulateVoiceDictation("Yesterday afternoon around 4:30 PM on Ring Road, my car got rear-ended at a signal. Rear bumper cracked, tailgate dented, and right tail lamp broken. Driver agreed to cashless assessment.")}
+                    className="px-4 py-3 rounded-full bg-[#201F1F] hover:bg-[#2A2A2A] text-zinc-200 text-xs font-semibold border border-white/10 flex items-center gap-2 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[18px] text-[#DEB7FF]">play_circle</span>
+                    <span>Instant Voice Demo</span>
+                  </button>
+
+                  {isRecordingIncident && (
+                    <div className="flex items-center gap-1 text-xs text-[#C5F258]">
+                      <span className="w-2 h-2 rounded-full bg-[#C5F258] animate-ping" />
+                      <span>Mic Active (Listening...)</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={toggleIncidentDictation}
-                      className="px-4 py-2 rounded-full bg-red-500 hover:bg-red-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shrink-0 transition-transform active:scale-95"
-                    >
-                      <span className="material-symbols-outlined text-[15px]">stop</span>
-                      <span>Stop & Transcribe</span>
-                    </button>
-                  </div>
-                )}
+                  )}
 
-                {isTranscribingIncident && (
-                  <div className="mb-3 p-3 rounded-2xl bg-[#632D93]/30 border border-[#DEB7FF]/40 flex items-center gap-2.5 text-xs text-[#DEB7FF] animate-pulse">
-                    <span className="w-3.5 h-3.5 border-2 border-[#DEB7FF] border-t-transparent rounded-full animate-spin" />
-                    <span>AI is finalizing your spoken incident transcript...</span>
-                  </div>
-                )}
+                  {isTranscribingIncident && (
+                    <div className="flex items-center gap-1 text-xs text-[#DEB7FF]">
+                      <span className="w-3 h-3 border-2 border-[#DEB7FF] border-t-transparent rounded-full animate-spin" />
+                      <span>Transcribing audio...</span>
+                    </div>
+                  )}
+                </div>
 
                 {incidentMicError && (
-                  <div className="mb-3 p-3 rounded-2xl bg-[#2A1818] border border-red-500/30 flex items-start justify-between gap-2 text-xs text-red-200">
-                    <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-[16px] text-red-400 shrink-0">info</span>
-                      <span>{incidentMicError}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setIncidentMicError(null)}
-                      className="text-zinc-400 hover:text-white text-xs font-bold"
-                    >
-                      ✕
-                    </button>
+                  <div className="mb-4 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
+                    <span className="material-symbols-outlined text-[16px]">warning</span>
+                    <span>{incidentMicError}</span>
                   </div>
                 )}
 
-                {/* Textarea */}
-                <div className="relative mb-4">
+                {/* Narrative Textarea */}
+                <div className="relative mb-5">
                   <textarea
-                    rows={4}
                     value={incidentText}
                     onChange={(e) => setIncidentText(e.target.value)}
+                    rows={4}
                     placeholder="Speak using the button above or type: e.g., Yesterday afternoon on Ring Road, my Creta got rear-ended at a signal. Rear bumper and headlamp broken..."
-                    className="w-full bg-[#131313] text-white text-sm p-4 rounded-2xl placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#DEB7FF]/50 transition-all resize-none shadow-inner"
+                    className="w-full p-4 rounded-2xl bg-[#141414] border border-white/[0.1] focus:border-[#C5F258] text-white placeholder-zinc-500 text-sm outline-none resize-none leading-relaxed transition-all"
                   />
-                  <div className="absolute bottom-3 right-3 flex items-center gap-2">
+                  <div className="absolute right-3 bottom-3 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => simulateVoiceDictation("Yesterday around 4:30 PM on Outer Ring Road, a commercial tempo grazed my right rear quarter panel while changing lanes. Minor dent and deep scratches along wheel arch; taillight housing cracked. Insured party details exchanged cleanly.")}
-                      className="px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300 flex items-center gap-1 transition-colors"
-                      title="Load sample incident"
+                      onClick={() => setIncidentText("Commercial truck backed into front bumper at petrol pump. Fiber bumper cracked, right headlamp broken. Third-party driver provided phone number.")}
+                      className="px-2.5 py-1 rounded-full bg-zinc-800 hover:bg-zinc-700 text-[11px] text-zinc-300 transition-colors flex items-center gap-1"
                     >
                       <span className="material-symbols-outlined text-[13px] text-[#C5F258]">lightbulb</span>
                       <span>Sample</span>
@@ -961,27 +1191,80 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                   </div>
                 </div>
 
-                {/* Policy Selector Block */}
-                <div className="p-3.5 rounded-2xl bg-[#131313] mb-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-xl bg-[#C5F258]/15 flex items-center justify-center shrink-0 text-[#C5F258]">
-                      <span className="material-symbols-outlined text-[20px]">verified_user</span>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-zinc-400">Linked Active Policy</span>
-                        <span className="px-1.5 py-0.2 rounded bg-[#C5F258]/20 text-[#C5F258] text-[9px] uppercase font-bold">
-                          Zero Deductible
-                        </span>
-                      </div>
-                      <p className="text-xs text-white font-semibold truncate">
-                        {activeClaim?.policyNumber || 'HDFC-MOT-2024-88419'} • {activeClaim?.vehicle || '2022 Hyundai Creta SX(O) • KA-05-MK-9284'} • HDFC ERGO Comprehensive
-                      </p>
-                    </div>
+                {/* REAL DYNAMIC POLICY SELECTOR BLOCK (Solves Problem 1) */}
+                <div className="p-4 rounded-2xl bg-[#131313] border border-white/[0.08] mb-5 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <span className="material-symbols-outlined text-[17px] text-[#C5F258]">verified_user</span>
+                      <span>Link Policy for this Claim</span>
+                    </span>
+                    <span className="text-[11px] text-zinc-400">
+                      {selectedInitiationPolicy === 'none' ? 'Freeform Mode' : 'Policy Selected'}
+                    </span>
                   </div>
-                  <span className="text-xs text-[#DEB7FF] font-semibold shrink-0">
-                    {activeClaim ? 'Active Claim Linked' : 'Fresh Policy Ready'}
-                  </span>
+
+                  {/* Policy Selection Options */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {/* Option: No Policy (Freeform) */}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedInitiationPolicy('none')}
+                      className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
+                        selectedInitiationPolicy === 'none'
+                          ? 'bg-[#1F1F1F] border-[#C5F258] text-white shadow-sm'
+                          : 'bg-[#181818] border-white/5 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <div className={`w-4 h-4 rounded-full mt-0.5 border flex items-center justify-center shrink-0 ${
+                        selectedInitiationPolicy === 'none' ? 'border-[#C5F258] bg-[#C5F258]' : 'border-zinc-600'
+                      }`}>
+                        {selectedInitiationPolicy === 'none' && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
+                      </div>
+                      <div>
+                        <strong className="text-xs text-white block">No Pre-Linked Policy</strong>
+                        <span className="text-[11px] text-zinc-400 block leading-tight">Freeform capture; AI auto-detects category & checklist</span>
+                      </div>
+                    </button>
+
+                    {/* Available Policies from Database */}
+                    {policies.map(p => {
+                      const isSel = selectedInitiationPolicy === p.policyNumber;
+                      const vTitle = p.vehicle?.makeModel ? p.vehicle.makeModel : (p.sumInsured ? `Sum Insured: ${p.sumInsured}` : p.productName);
+                      return (
+                        <button
+                          key={p.id || p.policyNumber}
+                          type="button"
+                          onClick={() => setSelectedInitiationPolicy(p.policyNumber)}
+                          className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
+                            isSel
+                              ? 'bg-[#1F1F1F] border-[#C5F258] text-white shadow-sm'
+                              : 'bg-[#181818] border-white/5 text-zinc-400 hover:text-white'
+                          }`}
+                        >
+                          <div className={`w-4 h-4 rounded-full mt-0.5 border flex items-center justify-center shrink-0 ${
+                            isSel ? 'border-[#C5F258] bg-[#C5F258]' : 'border-zinc-600'
+                          }`}>
+                            {isSel && <span className="w-1.5 h-1.5 rounded-full bg-black" />}
+                          </div>
+                          <div className="min-w-0">
+                            <strong className="text-xs text-white truncate block">{p.carrier}</strong>
+                            <span className="text-[11px] text-zinc-400 truncate block">{vTitle}</span>
+                            <span className="text-[10px] text-zinc-500 font-mono block">{p.policyNumber}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Feedback on selection */}
+                  <div className="text-[11px] text-zinc-400 pt-1 flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[14px] text-[#DEB7FF]">info</span>
+                    <span>
+                      {selectedInitiationPolicy === 'none'
+                        ? 'No active policy pre-linked. You can attach a policy schedule after the claim roadmap is generated.'
+                        : `Claim will be filed under policy ${selectedInitiationPolicy}.`}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Launch CTA */}
@@ -994,7 +1277,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                     {isConvertingIncident ? (
                       <>
                         <span className="w-4 h-4 border-2 border-[#151F00] border-t-transparent rounded-full animate-spin" />
-                        <span>Ollama Converting Speech/Text to Claim Journey...</span>
+                        <span>Converting Speech/Text to Claim Journey...</span>
                       </>
                     ) : (
                       <>
@@ -1028,7 +1311,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                         {conversionResult.aiAnalysis?.detectedCategory} • Severity: <span className="text-[#C5F258] uppercase font-bold">{conversionResult.aiAnalysis?.severity}</span>
                       </div>
                       <p className="text-zinc-400 text-[11px]">
-                        Estimated Repair Range: <strong className="text-white">₹{conversionResult.aiAnalysis?.estimatedCostRange?.min?.toLocaleString('en-IN')} - ₹{conversionResult.aiAnalysis?.estimatedCostRange?.max?.toLocaleString('en-IN')}</strong>
+                        Estimated Cost Range: <strong className="text-white">₹{conversionResult.aiAnalysis?.estimatedCostRange?.min?.toLocaleString('en-IN')} - ₹{conversionResult.aiAnalysis?.estimatedCostRange?.max?.toLocaleString('en-IN')}</strong>
                       </p>
                       <div className="flex flex-wrap gap-1 pt-1">
                         {conversionResult.aiAnalysis?.damagesIdentified?.map((d: string, i: number) => (
@@ -1057,53 +1340,6 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                   </div>
                 )}
               </div>
-
-              {/* In-Flight Draft or Brand New Account Welcome Card */}
-              {activeClaim ? (
-                <div className="p-4 rounded-2xl bg-[#141414] border border-white/[0.08] flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-[#C5F258]/20 flex items-center justify-center text-[#C5F258] shrink-0">
-                      <span className="material-symbols-outlined text-[18px]">history</span>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-zinc-400">In-Flight Draft Detected</span>
-                        <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-[10px] font-bold">
-                          {activeClaim.progressPercent}% Ready
-                        </span>
-                      </div>
-                      <p className="text-xs text-white font-medium truncate">
-                        {activeClaim.claimNumber} • {activeClaim.vehicle}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={onResumeClaim}
-                    className="shrink-0 px-3.5 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-semibold transition-colors flex items-center gap-1"
-                  >
-                    <span>Resume Claim</span>
-                    <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="p-4 rounded-2xl bg-[#141414] border border-white/[0.08] flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-8 h-8 rounded-full bg-[#DEB7FF]/20 flex items-center justify-center text-[#DEB7FF] shrink-0">
-                      <span className="material-symbols-outlined text-[18px]">add_circle</span>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-[#DEB7FF] font-semibold">Brand New Account</span>
-                        <span className="px-2 py-0.5 rounded-full bg-[#C5F258]/15 text-[#C5F258] text-[10px] font-bold">Ready</span>
-                      </div>
-                      <p className="text-xs text-zinc-300 font-medium truncate">
-                        Zero claims filed. Speak or type above to initiate your first claim.
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-xs text-zinc-500 font-mono">Step 1 of 4</span>
-                </div>
-              )}
             </div>
 
             {/* RIGHT COLUMN: AI Flight Plan & Advantage Rail */}
@@ -1132,7 +1368,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                     </div>
                     <div>
                       <h5 className="text-xs font-bold text-white">Clause & Coverage Extraction</h5>
-                      <p className="text-xs text-zinc-400 leading-snug">Parses HDFC ERGO policy wordings, zero-dep add-ons, and exclusion clauses against your incident.</p>
+                      <p className="text-xs text-zinc-400 leading-snug">Parses policy wordings, zero-dep add-ons, and exclusion clauses against your incident.</p>
                     </div>
                   </div>
 
@@ -1142,7 +1378,7 @@ export const AiClaimPilotScreen: React.FC<AiClaimPilotScreenProps> = ({
                     </div>
                     <div>
                       <h5 className="text-xs font-bold text-white">Bespoke Document Checklist</h5>
-                      <p className="text-xs text-zinc-400 leading-snug">Assembles exact requirement list: only 4 essential proofs requested, zero unnecessary overhead.</p>
+                      <p className="text-xs text-zinc-400 leading-snug">Assembles exact requirement list: only essential proofs requested, zero unnecessary overhead.</p>
                     </div>
                   </div>
 

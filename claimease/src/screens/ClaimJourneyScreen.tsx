@@ -410,7 +410,7 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
                         }`}>
                           {claim.status === 'submitted' ? 'Submitted & Sealed' :
                            claim.status === 'ready' ? 'Ready to Transmit' :
-                           ((claim.status as string) === 'draft' || (claim.status as string) === 'initiated') ? 'Draft / New' : 'In Review'}
+                           (claim.status as string) === 'initiated' || claim.status === 'draft' ? 'Draft / New' : 'In Review'}
                         </span>
                         <p className="text-[10px] text-zinc-500 mt-1">
                           {claim.incidentDate ? `Incident: ${claim.incidentDate}` : 'Date: N/A'}
@@ -1178,7 +1178,7 @@ export const ClaimJourneyScreen: React.FC<ClaimJourneyScreenProps> = ({
                   onClick={() => onNavigate('ai-claim-pilot')}
                   className="w-full py-2.5 px-4 rounded-full bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold flex items-center justify-center gap-1.5"
                 >
-                  <span className="material-symbols-outlined text-[16px]">chat_spark</span>
+                  <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
                   <span>Ask AI Claim Pilot about missing docs</span>
                 </button>
               </div>

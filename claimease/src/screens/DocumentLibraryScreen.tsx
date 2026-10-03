@@ -298,7 +298,7 @@ export const DocumentLibraryScreen: React.FC<DocumentLibraryScreenProps> = ({
           onClick={() => onNavigate('ai-claim-pilot')}
           className="px-6 py-3 rounded-full bg-[#DEB7FF] hover:bg-[#d09fff] text-[#2D0050] font-bold text-sm shadow-[0_4px_20px_-2px_rgba(222,183,255,0.4)] transition-all flex items-center gap-2 shrink-0"
         >
-          <span className="material-symbols-outlined text-[18px]">chat_spark</span>
+          <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
           <span>Ask AI Claim Pilot</span>
         </button>
       </div>

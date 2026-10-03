@@ -4,13 +4,15 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     message: str
     claimId: Optional[str] = None
+    policyNumber: Optional[str] = None
+    noContext: Optional[bool] = False
     currentStep: Optional[Union[int, str]] = 2
     chatHistory: Optional[List[Dict[str, Any]]] = None
 
 class GroundingContext(BaseModel):
     title: str = "IRDAI Grounded Copilot Verification"
     details: str
-    claimId: str
+    claimId: Optional[str] = None
     stepNumber: Optional[Union[int, str]] = 2
 
 class ActionableItem(BaseModel):
@@ -26,6 +28,7 @@ class ChatResponse(BaseModel):
 
 class IncidentRequest(BaseModel):
     narrative: str
+    policyNumber: Optional[str] = None
 
 class DiagnoseRequest(BaseModel):
     docId: str = "doc-custom"
